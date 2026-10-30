@@ -26,6 +26,11 @@ android {
         }
     }
 
+    // 唤醒模型（onnx）不压缩：aapt 压缩后每次加载都要解压，首次唤醒会明显变慢
+    androidResources {
+        noCompress += ['onnx']
+    }
+
     buildTypes {
         release {
             minifyEnabled false
@@ -50,4 +55,9 @@ dependencies {
     androidTestImplementation libs.espresso.core
     implementation fileTree(include: ['*.jar'], dir: 'libs')
     implementation files('libs/printersdkv5.7.3.jar')
+
+    // sherpa-onnx：离线关键词唤醒（KeywordSpotter）。含 arm64-v8a / armv7 的 ONNX Runtime。
+    // 本地 aar 引入（无需联网下载依赖），配套 kotlin-stdlib 也放在 libs/ 里（它由 Kotlin 编译，
+    // 运行时需要 kotlin.* 类，而本项目是纯 Java 工程）。
+    implementation files('libs/sherpa-onnx-1.12.20.aar')
 }

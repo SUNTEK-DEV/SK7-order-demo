@@ -19,6 +19,7 @@ import android.nfc.Tag;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.Looper;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.util.Log;
@@ -35,7 +36,17 @@ import android.widget.EditText;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import android.Manifest;
+import android.content.pm.PackageManager;
+import android.graphics.Color;
+import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
+import android.widget.ImageButton;
+import android.widget.Spinner;
+
 import androidx.activity.EdgeToEdge;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
@@ -115,6 +126,23 @@ public class MainActivity extends AppCompatActivity
     private boolean panelExpanded = false;
     private ValueAnimator panelAnimator;
     private static final long PANEL_ANIM_DURATION = 250L;
+
+    // ============ Voice ordering (multilingual, online) ============
+    private IVoiceRecognizer voiceRecognizer;
+    private VoiceAnnouncer voiceAnnouncer;
+    private Spinner spinnerLanguage;
+    private ImageButton btnMic;
+    private TextView tvVoiceStatus;
+    private String currentLangTag = "zh";
+    private boolean isVoiceListening = false;
+    private static final int REQUEST_RECORD_AUDIO = 2001;
+
+    // 语音唤醒（离线关键词）
+    private WakeWordDetector wakeDetector;
+    private boolean wakeEnabled = SpeechConfig.WAKE_ENABLED_BY_DEFAULT;
+    private boolean wakeLoading = false;
+    private final Handler voiceHandler = new Handler(Looper.getMainLooper());
+    private String lastWakeKeyword = "";
 
     private List<Product> productList;
     private HashMap<String, OrderItem> orderItemMap;
@@ -211,6 +239,20 @@ public class MainActivity extends AppCompatActivity
         initUSBConnection();
         initNFC();
         initLedLight();
+        initVoice();
+        ensureRecordPermission();
+    }
+
+    /** 主动申请录音权限（语音唤醒要在启动后就能常驻监听）。 */
+    private void ensureRecordPermission() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            Log.i(TAG, "ensureRecordPermission: 申请 RECORD_AUDIO");
+            ActivityCompat.requestPermissions(this,
+                    new String[]{Manifest.permission.RECORD_AUDIO}, REQUEST_RECORD_AUDIO);
+        } else if (wakeEnabled) {
+            initWakeWord();
+        }
     }
 
     private void registerUsbReceiver() {
@@ -240,6 +282,17 @@ public class MainActivity extends AppCompatActivity
         }
         if (ledLight != null) {
             ledLight.close();
+        }
+        if (voiceRecognizer != null) {
+            voiceRecognizer.release();
+        }
+        if (wakeDetector != null) {
+            voiceHandler.removeCallbacks(resumeWakeRunnable);
+            wakeDetector.release();
+            wakeDetector = null;
+        }
+        if (voiceAnnouncer != null) {
+            voiceAnnouncer.shutdown();
         }
         scanHandler.removeCallbacks(clearScanResult);
         scanHandler.removeCallbacks(usbRetryRunnable);
@@ -1469,6 +1522,432 @@ public class MainActivity extends AppCompatActivity
         refreshOrderList();
         Toast.makeText(this, "Order cleared", Toast.LENGTH_SHORT).show();
     }
+
+    // ============ Voice ordering (multilingual, online) ============
+
+    private void initVoice() {
+        spinnerLanguage = findViewById(R.id.spinner_language);
+        btnMic = findViewById(R.id.btn_mic);
+        tvVoiceStatus = findViewById(R.id.tv_voice_status);
+
+        List<String> langDisplays = new ArrayList<>();
+        for (SpeechConfig.Lang l : SpeechConfig.LANGUAGES) {
+            langDisplays.add(l.display);
+        }
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_item, langDisplays);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        spinnerLanguage.setAdapter(adapter);
+
+        int defaultPos = 0;
+        for (int i = 0; i < SpeechConfig.LANGUAGES.size(); i++) {
+            if (SpeechConfig.LANGUAGES.get(i).tag.equals(currentLangTag)) {
+                defaultPos = i;
+                break;
+            }
+        }
+        spinnerLanguage.setSelection(defaultPos);
+        applyLanguage(defaultPos);
+
+        spinnerLanguage.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                applyLanguage(position);
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+            }
+        });
+
+        btnMic.setOnClickListener(v -> onMicClick());
+        // 长按麦克风 = 开关语音唤醒
+        btnMic.setOnLongClickListener(v -> {
+            toggleWake();
+            return true;
+        });
+
+        // 云端在线识别（默认讯飞语音听写 iat，无需 GMS）
+        voiceRecognizer = new CloudSpeechRecognizer();
+        // 语音播报（讯飞在线合成，系统 TTS 兜底）
+        voiceAnnouncer = new VoiceAnnouncer(this);
+        voiceAnnouncer.init();
+        Log.i(TAG, "播报状态：" + voiceAnnouncer.getDiagnostics());
+
+        setVoiceStatus("语音点餐就绪（讯飞在线识别）");
+    }
+
+    // ============ 语音唤醒 ============
+
+    /** 后台加载唤醒模型并开始常驻监听。 */
+    private void initWakeWord() {
+        if (!wakeEnabled) {
+            setVoiceStatus("语音点餐就绪（唤醒已关闭，点麦克风说话；长按麦克风可开启）");
+            return;
+        }
+        if (wakeLoading) {
+            return;
+        }
+        if (wakeDetector != null && wakeDetector.isReady()) {
+            startWakeListening();
+            return;
+        }
+        wakeLoading = true;
+        setVoiceStatus("正在加载唤醒模型…");
+        new Thread(() -> {
+            WakeWordDetector d = new WakeWordDetector(MainActivity.this);
+            boolean ok = d.load();
+            final String reason = d.getUnavailableReason();
+            runOnUiThread(() -> {
+                wakeLoading = false;
+                if (!ok) {
+                    Log.e(TAG, "唤醒不可用：" + reason);
+                    setVoiceStatus("唤醒不可用：" + reason + "（仍可点麦克风说话）");
+                    return;
+                }
+                wakeDetector = d;
+                startWakeListening();
+            });
+        }, "WakeModelLoader").start();
+    }
+
+    private void startWakeListening() {
+        if (!wakeEnabled || wakeDetector == null) {
+            return;
+        }
+        if (!wakeDetector.isRunning()) {
+            wakeDetector.start(new WakeWordDetector.Callback() {
+                @Override
+                public void onWakeWord(String keyword) {
+                    runOnUiThread(() -> onWakeWordDetected(keyword));
+                }
+
+                @Override
+                public void onUnavailable(String reason) {
+                    runOnUiThread(() -> setVoiceStatus("唤醒不可用：" + reason));
+                }
+            });
+        }
+        if (!isVoiceListening) {
+            setVoiceStatus(idleHint());
+        }
+    }
+
+    /** 空闲状态提示语（说明当前怎么触发）。 */
+    private String idleHint() {
+        if (wakeEnabled) {
+            return "🎙 待唤醒：说「" + SpeechConfig.WAKE_WORDS[0][1] + "」，或点麦克风";
+        }
+        return "点麦克风开始说话（长按麦克风可开启语音唤醒）";
+    }
+
+    private void onWakeWordDetected(String keyword) {
+        lastWakeKeyword = keyword;
+        Log.i(TAG, "onWakeWordDetected: " + keyword + ", listening=" + isVoiceListening);
+        if (isVoiceListening) {
+            return;
+        }
+        // 唤醒监听与识别都要占用麦克风，必须互斥
+        if (wakeDetector != null) {
+            wakeDetector.pause();
+        }
+        if (voiceAnnouncer != null) {
+            voiceAnnouncer.stop(); // 万一正在播报，先掐掉，避免被自己的声音打断
+        }
+        setVoiceStatus("🔔 已唤醒（" + keyword + "），请说要点什么…");
+        startVoiceListening();
+    }
+
+    private final Runnable resumeWakeRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!wakeEnabled || wakeDetector == null || isVoiceListening) {
+                return;
+            }
+            // 播报期间不要监听，否则会把自己的声音当唤醒词
+            if (voiceAnnouncer != null && voiceAnnouncer.isBusy()) {
+                voiceHandler.postDelayed(this, 400);
+                return;
+            }
+            wakeDetector.resume();
+            if (!wakeDetector.isRunning()) {
+                startWakeListening();
+            } else {
+                setVoiceStatus(idleHint());
+            }
+        }
+    };
+
+    /** 识别/播报结束后，延迟恢复唤醒监听。 */
+    private void resumeWakeLater(long delayMs) {
+        if (!wakeEnabled || wakeDetector == null) {
+            return;
+        }
+        voiceHandler.removeCallbacks(resumeWakeRunnable);
+        voiceHandler.postDelayed(resumeWakeRunnable, delayMs);
+    }
+
+    /** 长按麦克风：开关语音唤醒。 */
+    private void toggleWake() {
+        wakeEnabled = !wakeEnabled;
+        Log.i(TAG, "toggleWake: enabled=" + wakeEnabled);
+        if (wakeEnabled) {
+            showToast("语音唤醒已开启：说「" + SpeechConfig.WAKE_WORDS[0][1] + "」");
+            if (wakeDetector != null && wakeDetector.isReady()) {
+                wakeDetector.resume();
+                startWakeListening();
+            } else {
+                initWakeWord();
+            }
+        } else {
+            showToast("语音唤醒已关闭");
+            voiceHandler.removeCallbacks(resumeWakeRunnable);
+            if (wakeDetector != null) {
+                wakeDetector.pause();
+            }
+            setVoiceStatus(idleHint());
+        }
+    }
+
+    private void applyLanguage(int position) {
+        SpeechConfig.Lang lang = SpeechConfig.getLang(position);
+        currentLangTag = lang.tag;
+        if (voiceRecognizer != null) {
+            voiceRecognizer.setLanguage(lang.bcp47);
+        }
+        if (voiceAnnouncer != null) {
+            voiceAnnouncer.setLocale(lang.locale);
+        }
+        // 讯飞账号暂未开通德语许可（服务端返回 licc failed），提前给出提示
+        if (SpeechConfig.PROVIDER == SpeechConfig.Provider.XUNFEI && "de".equals(lang.tag)) {
+            setVoiceStatus("⚠ 德语需在讯飞控制台开通“小语种”服务（当前 licc failed），可先切 中文 / English");
+        } else if (!isVoiceListening) {
+            setVoiceStatus(idleHint());
+        }
+    }
+
+    private void onMicClick() {
+        Log.i(TAG, "onMicClick: listening=" + isVoiceListening);
+        if (isVoiceListening) {
+            stopVoiceListening();
+        } else {
+            int perm = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO);
+            Log.i(TAG, "onMicClick: RECORD_AUDIO permission=" + perm
+                    + " (GRANTED=" + PackageManager.PERMISSION_GRANTED + ")");
+            if (perm != PackageManager.PERMISSION_GRANTED) {
+                Log.w(TAG, "onMicClick: requesting RECORD_AUDIO permission");
+                pendingMicAfterPermission = true;
+                ActivityCompat.requestPermissions(this,
+                        new String[]{Manifest.permission.RECORD_AUDIO}, REQUEST_RECORD_AUDIO);
+                return;
+            }
+            startVoiceListening();
+        }
+    }
+
+    private void startVoiceListening() {
+        Log.i(TAG, "startVoiceListening: recognizer=" + voiceRecognizer + ", langTag=" + currentLangTag);
+        if (voiceRecognizer == null) {
+            Log.e(TAG, "startVoiceListening: voiceRecognizer is null!");
+            return;
+        }
+        // 唤醒监听与识别共用麦克风，先让唤醒让出
+        if (wakeDetector != null) {
+            wakeDetector.pause();
+            voiceHandler.removeCallbacks(resumeWakeRunnable);
+        }
+        isVoiceListening = true;
+        if (btnMic != null) {
+            btnMic.setColorFilter(Color.RED);
+        }
+        setVoiceStatus("🎤 聆听中…（说完停顿会自动结束）");
+        voiceRecognizer.start(new IVoiceRecognizer.Listener() {
+            @Override
+            public void onReady() {
+                Log.i(TAG, "voice: onReady");
+            }
+
+            @Override
+            public void onPartialResult(String text) {
+                Log.d(TAG, "voice: onPartial=[" + text + "]");
+                runOnUiThread(() -> setVoiceStatus(text));
+            }
+
+            @Override
+            public void onFinalResult(String text) {
+                Log.i(TAG, "voice: onFinal=[" + text + "]");
+                runOnUiThread(() -> finishVoiceRecognition(text));
+            }
+
+            @Override
+            public void onError(String message) {
+                Log.e(TAG, "voice: onError=" + message);
+                runOnUiThread(() -> onVoiceError(message));
+            }
+        });
+    }
+
+    private void stopVoiceListening() {
+        isVoiceListening = false;
+        if (voiceRecognizer != null) {
+            voiceRecognizer.stop();
+        }
+        if (btnMic != null) {
+            btnMic.clearColorFilter();
+        }
+    }
+
+    private void finishVoiceRecognition(String text) {
+        Log.i(TAG, "finishVoiceRecognition: text=[" + text + "]");
+        isVoiceListening = false;
+        if (btnMic != null) {
+            btnMic.clearColorFilter();
+        }
+        if (text == null || text.trim().isEmpty()) {
+            Log.w(TAG, "finishVoiceRecognition: empty transcript");
+            setVoiceStatus("未识别到语音");
+            announceNoMatch();
+            resumeWakeLater(800);
+            return;
+        }
+        setVoiceStatus("识别：" + text);
+        processVoiceOrder(text);
+        resumeWakeLater(1000);
+    }
+
+    private void onVoiceError(String message) {
+        isVoiceListening = false;
+        if (btnMic != null) {
+            btnMic.clearColorFilter();
+        }
+        setVoiceStatus("⚠️ " + message);
+        showToast(message);
+        resumeWakeLater(1000);
+    }
+
+    /** 把识别文本解析成「数量+商品」并自动加购，再用对应语言播报。 */
+    private void processVoiceOrder(String transcript) {
+        List<VoiceOrderParser.OrderCommand> commands =
+                VoiceOrderParser.parse(transcript, currentLangTag, productList);
+        Log.i(TAG, "processVoiceOrder: lang=" + currentLangTag + ", transcript=[" + transcript
+                + "], parsedCommands=" + commands.size());
+        if (commands.isEmpty()) {
+            Log.w(TAG, "processVoiceOrder: no product matched, products=" + (productList == null ? -1 : productList.size()));
+            announceNoMatch();
+            return;
+        }
+        for (VoiceOrderParser.OrderCommand cmd : commands) {
+            Log.i(TAG, "processVoiceOrder: add " + cmd.displayName + " x" + cmd.quantity
+                    + " (id=" + cmd.product.getId() + ")");
+            addProduct(cmd.product, cmd.quantity);
+        }
+        // 展开订单面板，让用户看到已点内容
+        setOrderPanelExpanded(true);
+
+        String msg = buildVoiceMessage(commands);
+        setVoiceStatus(msg);
+        showToast(msg);
+        if (voiceAnnouncer != null && voiceAnnouncer.isAvailable()) {
+            voiceAnnouncer.announce(msg, SpeechConfig.getLangByTag(currentLangTag).locale);
+        } else {
+            // 无 TTS 引擎时给出提示，避免“没声音”却不知原因
+            Log.w(TAG, "TTS unavailable: " + (voiceAnnouncer != null ? voiceAnnouncer.getDiagnostics() : ""));
+        }
+    }
+
+    /** 一次加入多个数量的同一商品。 */
+    private void addProduct(Product product, int count) {
+        if (count <= 0) {
+            count = 1;
+        }
+        String productId = product.getId();
+        OrderItem item = orderItemMap.get(productId);
+        if (item != null) {
+            for (int i = 0; i < count; i++) {
+                item.incrementQuantity();
+            }
+        } else {
+            OrderItem newItem = new OrderItem(product);
+            for (int i = 1; i < count; i++) {
+                newItem.incrementQuantity();
+            }
+            orderItemMap.put(productId, newItem);
+            orderItems.add(newItem);
+        }
+        refreshOrderList();
+    }
+
+    private String buildVoiceMessage(List<VoiceOrderParser.OrderCommand> commands) {
+        StringBuilder items = new StringBuilder();
+        for (int i = 0; i < commands.size(); i++) {
+            if (i > 0) {
+                items.append("，");
+            }
+            // 注意：播报用文本不要带 "×"（TTS 会念成"乘号"），用空格 + 数字
+            items.append(commands.get(i).displayName).append(" ")
+                    .append(commands.get(i).quantity);
+        }
+        switch (currentLangTag) {
+            case "zh":
+                return "已添加：" + items;
+            case "de":
+                return "Hinzugefügt: " + items;
+            default:
+                return "Added: " + items;
+        }
+    }
+
+    private void announceNoMatch() {
+        String msg;
+        switch (currentLangTag) {
+            case "zh":
+                msg = "没有识别到点餐内容，请重试";
+                break;
+            case "de":
+                msg = "Kein Artikel erkannt, bitte erneut versuchen";
+                break;
+            default:
+                msg = "No item recognized, please try again";
+                break;
+        }
+        setVoiceStatus(msg);
+        showToast(msg);
+        if (voiceAnnouncer != null && voiceAnnouncer.isAvailable()) {
+            voiceAnnouncer.announce(msg, SpeechConfig.getLangByTag(currentLangTag).locale);
+        }
+    }
+
+    private void setVoiceStatus(String text) {
+        if (tvVoiceStatus == null) {
+            return;
+        }
+        final String value = text;
+        runOnUiThread(() -> tvVoiceStatus.setText(value));
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQUEST_RECORD_AUDIO) {
+            boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+            Log.i(TAG, "onRequestPermissionsResult: RECORD_AUDIO granted=" + granted
+                    + ", grantResults.length=" + grantResults.length);
+            if (granted) {
+                if (pendingMicAfterPermission) {
+                    pendingMicAfterPermission = false;
+                    startVoiceListening();
+                } else {
+                    initWakeWord();
+                }
+            } else {
+                setVoiceStatus("⚠️ 麦克风权限被拒绝（语音功能不可用）");
+                showToast("需要录音权限才能使用语音点餐");
+            }
+        }
+    }
+
+    private boolean pendingMicAfterPermission = false;
+
     
     /**
      * Enable full-screen mode by hiding system bars (navigation bar and status bar).

@@ -122,6 +122,52 @@
 
     </LinearLayout>
 
+    <!-- Voice ordering bar: language spinner + mic + status -->
+    <LinearLayout
+        android:id="@+id/voice_bar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="@color/warm_surface"
+        android:paddingHorizontal="16dp"
+        android:paddingVertical="10dp"
+        app:layout_constraintTop_toBottomOf="@id/search_container">
+
+        <Spinner
+            android:id="@+id/spinner_language"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:minWidth="110dp"
+            android:background="@drawable/chip_bg"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp" />
+
+        <ImageButton
+            android:id="@+id/btn_mic"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="12dp"
+            android:background="@drawable/mic_button_bg"
+            android:src="@drawable/ic_mic"
+            android:scaleType="centerInside"
+            android:padding="12dp"
+            android:contentDescription="语音点餐"
+            android:tint="@color/white" />
+
+        <TextView
+            android:id="@+id/tv_voice_status"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="12dp"
+            android:text="语音点餐就绪"
+            android:textSize="13sp"
+            android:textColor="@color/text_muted"
+            android:maxLines="1"
+            android:ellipsize="end" />
+    </LinearLayout>
+
     <!-- Category chips -->
     <HorizontalScrollView
         android:id="@+id/category_scroll"
@@ -131,7 +177,7 @@
         android:background="@color/warm_surface"
         android:paddingVertical="12dp"
         android:paddingHorizontal="16dp"
-        app:layout_constraintTop_toBottomOf="@id/search_container">
+        app:layout_constraintTop_toBottomOf="@id/voice_bar">
 
         <LinearLayout
             android:id="@+id/category_container"
