@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="green">#416B0F</color>
+
+    <!-- Burger King inspired warm palette -->
+    <color name="brand_orange">#FF6B00</color>
+    <color name="brand_orange_dark">#E85D04</color>
+    <color name="brand_red">#D62300</color>
+    <color name="brand_yellow">#FFC72C</color>
+    <color name="brand_brown">#502314</color>
+
+    <!-- Surfaces -->
+    <color name="primary_bg">#FFF3E0</color>
+    <color name="card_bg">#FFFFFF</color>
+    <color name="warm_surface">#FFF9F0</color>
+    <color name="text_main">#3A2318</color>
+    <color name="text_muted">#8C6A57</color>
+    <color name="price_color">#D62300</color>
+    <color name="border_color">#F6E0C8</color>
+    <color name="search_bg">#FFFFFF</color>
+    <color name="chip_bg">#FFEEDB</color>
+
+    <!-- Header gradient -->
+    <color name="header_start">#FF7A1A</color>
+    <color name="header_end">#E85D04</color>
+
+    <!-- Scrim behind the NFC payment prompt -->
+    <color name="nfc_scrim">#991A0F0A</color>
+
+    <!-- Action buttons -->
+    <color name="btn_pay">#FF6B00</color>
+    <color name="btn_print">#2E7D32</color>
+    <color name="btn_hold">#F57C00</color>
+    <color name="btn_clear">#D62300</color>
+
+    <color name="btn_print_bg">#E7F4EA</color>
+    <color name="btn_hold_bg">#FFF3E0</color>
+    <color name="btn_clear_bg">#FFE7E1</color>
+</resources>

@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>优享超市 - 21寸国际化智能收银终端</title>
+    <style>
+        :root {
+            /* 汉堡王风格暖色调 */
+            --brand-orange: #FF6B00;
+            --brand-orange-dark: #E85D04;
+            --brand-red: #D62300;
+            --brand-yellow: #FFC72C;
+            --brand-brown: #502314;
+
+            --primary-bg: #FFF3E0;
+            --card-bg: #ffffff;
+            --warm-surface: #FFF9F0;
+            --text-main: #3A2318;
+            --text-muted: #8C6A57;
+            --price-color: #D62300;
+            --border-color: #F6E0C8;
+
+            /* 底部四色标志性按钮 */
+            --btn-pay: #FF6B00;
+            --btn-print: #2E7D32;
+            --btn-hold: #F57C00;
+            --btn-clear: #D62300;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        }
+
+        body {
+            background-color: #2B1810;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        /* 模拟 21寸 竖屏真机比例 (1080 x 1920) */
+        .screen-container {
+            width: 540px;  /* 预览等比例缩放 */
+            height: 960px; /* 预览等比例缩放 */
+            background-color: var(--primary-bg);
+            border-radius: 24px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.55);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            border: 6px solid #1B0F09;
+            position: relative;
+        }
+
+        /* ================= 1. 顶部 Header 区（暖橙渐变） ================= */
+        header {
+            background: linear-gradient(90deg, #FF7A1A, var(--brand-orange-dark));
+            padding: 18px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .shop-brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .shop-logo {
+            width: 40px;
+            height: 40px;
+            background: var(--brand-yellow);
+            color: var(--brand-brown);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.3rem;
+            font-weight: bold;
+        }
+
+        .shop-title h2 {
+            font-size: 1.25rem;
+            color: #ffffff;
+            font-weight: 800;
+        }
+
+        .shop-title span {
+            font-size: 0.78rem;
+            font-weight: bold;
+            color: var(--brand-brown);
+            background: var(--brand-yellow);
+            padding: 2px 8px;
+            border-radius: 6px;
+            margin-left: 6px;
+        }
+
+        .cashier-meta {
+            text-align: right;
+            font-size: 0.82rem;
+            font-weight: bold;
+            color: #FFE3CC;
+        }
+
+        /* ================= 2. 搜索与横向分类栏 ================= */
+        .search-container {
+            padding: 4px 24px 16px 24px;
+            background: linear-gradient(90deg, #FF7A1A, var(--brand-orange-dark));
+        }
+
+        .search-box {
+            background: #ffffff;
+            border-radius: 26px;
+            padding: 14px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            color: var(--text-muted);
+            font-size: 0.95rem;
+            border: 1px solid var(--border-color);
+        }
+
+        .category-bar {
+            display: flex;
+            gap: 10px;
+            padding: 14px 24px;
+            background: var(--warm-surface);
+            overflow-x: auto;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .category-bar::-webkit-scrollbar { display: none; }
+
+        .cat-chip {
+            padding: 10px 20px;
+            border-radius: 22px;
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: var(--brand-brown);
+            background: #FFEEDB;
+            border: 1px solid var(--border-color);
+            white-space: nowrap;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .cat-chip.active {
+            background: var(--brand-red);
+            color: white;
+            border-color: var(--brand-red);
+        }
+
+        /* ================= 3. 商品网格滚动区（大图大字） ================= */
+        .products-scroll-area {
+            flex: 1;
+            padding: 8px;
+            overflow-y: auto;
+        }
+
+        .products-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 6px;
+        }
+
+        .product-card {
+            background: var(--card-bg);
+            border-radius: 20px;
+            padding: 14px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            position: relative;
+            box-shadow: 0 6px 14px -6px rgba(80, 35, 20, 0.18);
+            border: 1px solid var(--border-color);
+        }
+
+        .prod-img-wrapper {
+            width: 100%;
+            height: 150px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #FFF6E9;
+            border-radius: 16px;
+            overflow: hidden;
+            padding: 6px;
+        }
+
+        .prod-img-wrapper img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+
+        /* 价格行：金额居中，橙色 "+" 加购按钮在同一行最右角 */
+        .price-row {
+            display: flex;
+            align-items: center;
+            width: 100%;
+            margin-top: auto;
+            gap: 8px;
+        }
+
+        .add-badge {
+            flex: 0 0 auto;
+            width: 34px;
+            height: 34px;
+            border-radius: 50%;
+            background: var(--brand-orange);
+            color: #fff;
+            border: 2px solid #fff;
+            font-size: 1.4rem;
+            font-weight: 700;
+            line-height: 30px;
+            text-align: center;
+            box-shadow: 0 3px 8px rgba(255, 107, 0, 0.45);
+        }
+
+        .prod-name {
+            font-size: 1rem;
+            font-weight: 700;
+            color: var(--text-main);
+            line-height: 1.3;
+            height: 2.6em;
+            margin-top: 10px;
+            overflow: hidden;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+        }
+
+        .prod-spec {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin: 3px 0 6px 0;
+        }
+
+        .prod-price {
+            flex: 1;
+            text-align: center;
+            font-size: 1.3rem;
+            font-weight: 800;
+            color: var(--price-color);
+        }
+
+        /* ================= 4. 固底购物车与结算台（可收起/展开，默认收起） ================= */
+        .bottom-checkout-panel {
+            background: var(--warm-surface);
+            border-radius: 26px 26px 0 0;
+            box-shadow: 0 -10px 25px -5px rgba(80, 35, 20, 0.15);
+            display: flex;
+            flex-direction: column;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .panel-handle {
+            width: 44px;
+            height: 5px;
+            border-radius: 3px;
+            background: #E8CBA9;
+            margin: 8px auto 0 auto;
+        }
+
+        .cart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 20px 8px 20px;
+            font-size: 1rem;
+            font-weight: 800;
+            color: var(--brand-brown);
+            cursor: pointer;
+        }
+
+        .cart-header-right {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .cart-header .clear-link {
+            color: var(--btn-clear);
+            font-size: 0.9rem;
+            cursor: pointer;
+            /* 收起时隐藏 Clear，展开后才显示 */
+            display: none;
+        }
+
+        .cart-header.expanded .clear-link { display: inline; }
+
+        .panel-arrow {
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            background: #FFEEDB;
+            border: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: transform 0.28s ease;
+        }
+
+        .panel-arrow svg { display: block; }
+        .panel-arrow.expanded { transform: rotate(180deg); }
+
+        /* 可展开区域：默认收起（max-height: 0） */
+        .panel-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.28s ease;
+        }
+
+        .panel-content.expanded {
+            border-top: 1px solid var(--border-color);
+        }
+
+        .panel-divider {
+            height: 1px;
+            background: var(--border-color);
+        }
+
+        /* 购物车已选单品 */
+        .cart-items-list {
+            max-height: 150px;
+            overflow-y: auto;
+            padding: 0 24px;
+        }
+
+        .cart-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid #FBEEDD;
+        }
+
+        .item-meta h4 {
+            font-size: 0.95rem;
+            color: var(--text-main);
+            font-weight: 700;
+        }
+
+        .item-meta span {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+
+        .item-quantity-control {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: #FFF6E9;
+            border: 1px solid var(--border-color);
+            padding: 5px 8px;
+            border-radius: 24px;
+        }
+
+        .qty-btn {
+            border: none;
+            background: #ffffff;
+            border: 1px solid var(--border-color);
+            font-weight: bold;
+            font-size: 1rem;
+            cursor: pointer;
+            color: var(--text-muted);
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            line-height: 22px;
+        }
+
+        .qty-btn.plus {
+            background: var(--brand-orange);
+            border-color: var(--brand-orange);
+            color: #fff;
+        }
+
+        .item-final-price {
+            font-size: 1rem;
+            font-weight: 800;
+            color: var(--brand-red);
+            min-width: 64px;
+            text-align: right;
+        }
+
+        /* 总金额栏：固定在结算栏最底部，收起时也始终可见 */
+        .cart-summary {
+            padding: 14px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--primary-bg);
+            border-top: 1px solid var(--border-color);
+        }
+
+        .summary-left {
+            font-size: 0.9rem;
+            font-weight: bold;
+            color: var(--text-muted);
+        }
+
+        .summary-right span:first-child {
+            font-size: 1rem;
+            font-weight: 800;
+            color: var(--brand-brown);
+        }
+
+        .summary-total-price {
+            font-size: 1.8rem;
+            font-weight: 800;
+            color: var(--price-color);
+        }
+
+        /* 四色功能动作网格按钮 */
+        .grid-actions {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            padding: 16px 24px 24px 24px;
+        }
+
+        .action-btn {
+            border: none;
+            border-radius: 16px;
+            padding: 15px 0;
+            color: white;
+            font-size: 0.95rem;
+            font-weight: 700;
+            cursor: pointer;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+            transition: transform 0.1s ease;
+        }
+
+        .action-btn:active {
+            transform: scale(0.95);
+        }
+
+        .btn-p-pay { background: var(--btn-pay); }
+        .btn-p-print { background: #E7F4EA; color: var(--btn-print); }
+        .btn-p-hold { background: #FFF3E0; color: var(--btn-hold); }
+        .btn-p-clear { background: #FFE7E1; color: var(--btn-clear); }
+
+        .btn-icon { font-size: 1.4rem; }
+    </style>
+</head>
+<body>
+
+    <div class="screen-container">
+        
+        <header>
+            <div class="shop-brand">
+                <div class="shop-logo">🍔</div>
+                <div class="shop-title">
+                    <h2>优享超市 <span>营业中</span></h2>
+                </div>
+            </div>
+            <div class="cashier-meta">
+                <div>2026-06-10 18:20</div>
+                <div>收银员: 小美</div>
+            </div>
+        </header>
+
+        <div class="search-container">
+            <div class="search-box">
+                <span>🔍 搜索商品名称或条码</span>
+                <span>🔲</span>
+            </div>
+        </div>
+
+        <div class="category-bar">
+            <div class="cat-chip active">全部 All</div>
+            <div class="cat-chip">饮料 Drinks</div>
+            <div class="cat-chip">零食 Snacks</div>
+            <div class="cat-chip">日用品 Groceries</div>
+            <div class="cat-chip">生鲜 Fresh</div>
+            <div class="cat-chip">母婴 Baby</div>
+        </div>
+
+        <main class="products-scroll-area">
+            <div class="products-grid">
+                <div class="product-card">
+                    <div class="prod-img-wrapper">
+                        <img src="https://images.unsplash.com/photo-1622483767028-3f66f32aef97?w=300&auto=format&fit=crop&q=80" alt="农夫山泉">
+                    </div>
+                    <div class="prod-name">农夫山泉 饮用水</div>
+                    <div class="prod-spec">550ml</div>
+                    <div class="price-row">
+                        <div class="prod-price">¥2.00</div>
+                        <div class="add-badge">+</div>
+                    </div>
+                </div>
+                <div class="product-card">
+                    <div class="prod-img-wrapper">
+                        <img src="https://images.unsplash.com/photo-1554866585-cd94860890b7?w=300&auto=format&fit=crop&q=80" alt="可口可乐">
+                    </div>
+                    <div class="prod-name">可口可乐 易拉罐</div>
+                    <div class="prod-spec">330ml</div>
+                    <div class="price-row">
+                        <div class="prod-price">¥3.00</div>
+                        <div class="add-badge">+</div>
+                    </div>
+                </div>
+                <div class="product-card">
+                    <div class="prod-img-wrapper">
+                        <img src="https://images.unsplash.com/photo-1566478431377-9dd905743f3d?w=300&auto=format&fit=crop&q=80" alt="乐事薯片">
+                    </div>
+                    <div class="prod-name">乐事薯片 黄瓜味</div>
+                    <div class="prod-spec">70g</div>
+                    <div class="price-row">
+                        <div class="prod-price">¥4.50</div>
+                        <div class="add-badge">+</div>
+                    </div>
+                </div>
+                <div class="product-card">
+                    <div class="prod-img-wrapper">
+                        <img src="https://images.unsplash.com/photo-1597318181409-cf64d0b5d8a2?w=300&auto=format&fit=crop&q=80" alt="绿茶">
+                    </div>
+                    <div class="prod-name">统一 绿茶</div>
+                    <div class="prod-spec">500ml</div>
+                    <div class="price-row">
+                        <div class="prod-price">¥3.50</div>
+                        <div class="add-badge">+</div>
+                    </div>
+                </div>
+                <div class="product-card">
+                    <div class="prod-img-wrapper">
+                        <img src="https://images.unsplash.com/photo-1548907040-4d42b52145ea?w=300&auto=format&fit=crop&q=80" alt="德芙巧克力">
+                    </div>
+                    <div class="prod-name">德芙巧克力 牛奶味</div>
+                    <div class="prod-spec">43g</div>
+                    <div class="price-row">
+                        <div class="prod-price">¥3.00</div>
+                        <div class="add-badge">+</div>
+                    </div>
+                </div>
+                <div class="product-card">
+                    <div class="prod-img-wrapper">
+                        <img src="https://images.unsplash.com/photo-1583947215259-38e31be8751f?w=300&auto=format&fit=crop&q=80" alt="清风抽纸">
+                    </div>
+                    <div class="prod-name">清风 抽纸 3层</div>
+                    <div class="prod-spec">100抽</div>
+                    <div class="price-row">
+                        <div class="prod-price">¥5.00</div>
+                        <div class="add-badge">+</div>
+                    </div>
+                </div>
+                <div class="product-card">
+                    <div class="prod-img-wrapper">
+                        <img src="https://images.unsplash.com/photo-1601049541289-9b1b7bbbfe19?w=300&auto=format&fit=crop&q=80" alt="洗手液">
+                    </div>
+                    <div class="prod-name">蓝月亮 洗手液</div>
+                    <div class="prod-spec">500g</div>
+                    <div class="price-row">
+                        <div class="prod-price">¥9.90</div>
+                        <div class="add-badge">+</div>
+                    </div>
+                </div>
+                <div class="product-card">
+                    <div class="prod-img-wrapper">
+                        <img src="https://images.unsplash.com/photo-1571771894821-ce9b6c11b08e?w=300&auto=format&fit=crop&q=80" alt="香蕉">
+                    </div>
+                    <div class="prod-name">新鲜香蕉</div>
+                    <div class="prod-spec">约500g</div>
+                    <div class="price-row">
+                        <div class="prod-price">¥6.50</div>
+                        <div class="add-badge">+</div>
+                    </div>
+                </div>
+                <div class="product-card">
+                    <div class="prod-img-wrapper">
+                        <img src="https://images.unsplash.com/photo-1516448620398-c5f44bf9f441?w=300&auto=format&fit=crop&q=80" alt="鸡蛋">
+                    </div>
+                    <div class="prod-name">鲜鸡蛋</div>
+                    <div class="prod-spec">10枚</div>
+                    <div class="price-row">
+                        <div class="prod-price">¥6.90</div>
+                        <div class="add-badge">+</div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <div class="bottom-checkout-panel">
+            
+            <div class="panel-handle"></div>
+
+            <div class="cart-header">
+                <span>待付款清单</span>
+                <span class="cart-header-right">
+                    <span class="clear-link">清空 🗑️</span>
+                    <span class="panel-arrow" id="panel_arrow" role="button" aria-label="展开订单">
+                        <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M12,8L6,14L7.41,15.41L12,10.83L16.59,15.41L18,14L12,8Z" fill="#502314"/>
+                        </svg>
+                    </span>
+                </span>
+            </div>
+
+            <div class="panel-content" id="panel_content">
+            <div class="panel-divider"></div>
+
+            <div class="cart-items-list">
+                <div class="cart-item">
+                    <div class="item-meta">
+                        <h4>农夫山泉 饮用水</h4>
+                        <span>¥2.00</span>
+                    </div>
+                    <div class="item-quantity-control">
+                        <button class="qty-btn">-</button>
+                        <span>1</span>
+                        <button class="qty-btn plus">+</button>
+                    </div>
+                    <div class="item-final-price">¥2.00</div>
+                </div>
+                <div class="cart-item">
+                    <div class="item-meta">
+                        <h4>可口可乐 330ml</h4>
+                        <span>¥3.00</span>
+                    </div>
+                    <div class="item-quantity-control">
+                        <button class="qty-btn">-</button>
+                        <span>2</span>
+                        <button class="qty-btn plus">+</button>
+                    </div>
+                    <div class="item-final-price">¥6.00</div>
+                </div>
+                <div class="cart-item">
+                    <div class="item-meta">
+                        <h4>乐事薯片 黄瓜味</h4>
+                        <span>¥4.50</span>
+                    </div>
+                    <div class="item-quantity-control">
+                        <button class="qty-btn">-</button>
+                        <span>1</span>
+                        <button class="qty-btn plus">+</button>
+                    </div>
+                    <div class="item-final-price">¥4.50</div>
+                </div>
+            </div>
+
+            </div>
+
+            <div class="cart-summary">
+                <div class="summary-left">
+                    共 <strong>4</strong> 件商品
+                </div>
+                <div class="summary-right">
+                    <span>合计: </span>
+                    <span class="summary-total-price">¥19.00</span>
+                </div>
+            </div>
+
+            <div class="grid-actions">
+                <button class="action-btn btn-p-pay">
+                    <span class="btn-icon">¥</span>
+                    <span>付款</span>
+                </button>
+                <button class="action-btn btn-p-print">
+                    <span class="btn-icon">🖨️</span>
+                    <span>打印收据</span>
+                </button>
+                <button class="action-btn btn-p-hold">
+                    <span class="btn-icon">📋</span>
+                    <span>挂单</span>
+                </button>
+                <button class="action-btn btn-p-clear">
+                    <span class="btn-icon">🗑️</span>
+                    <span>清空</span>
+                </button>
+            </div>
+
+        </div>
+
+    </div>
+
+    <script>
+        // 结算栏：默认收起，收起后整一条标题栏都可点击展开/收起（触控面积更大）
+        (function () {
+            var header = document.querySelector('.cart-header');
+            var arrow = document.getElementById('panel_arrow');
+            var content = document.getElementById('panel_content');
+            if (!header || !arrow || !content) return;
+            var expanded = false;
+            header.addEventListener('click', function (e) {
+                // 点“清空”不触发展开/收起
+                if (e.target.closest('.clear-link')) return;
+                expanded = !expanded;
+                header.classList.toggle('expanded', expanded);
+                arrow.classList.toggle('expanded', expanded);
+                content.classList.toggle('expanded', expanded);
+                content.style.maxHeight = expanded ? content.scrollHeight + 'px' : '0px';
+            });
+        })();
+
+        // 结算账单 +/-：真实可点（减到 1 再减 = 移除该行，合计含 5% 税费，与 App 一致）
+        (function () {
+            var TAX_RATE = 0.05;
+
+            function money(n) { return '¥' + n.toFixed(2); }
+
+            function parseYuan(text) { return parseFloat(String(text).replace('¥', '')) || 0; }
+
+            function recalc() {
+                var items = document.querySelectorAll('.cart-item');
+                var count = 0, subtotal = 0;
+                items.forEach(function (item) {
+                    var unit = parseYuan(item.querySelector('.item-meta span').textContent);
+                    var qty = parseInt(item.querySelector('.item-quantity-control span').textContent, 10);
+                    count += qty;
+                    subtotal += unit * qty;
+                    item.querySelector('.item-final-price').textContent = money(unit * qty);
+                });
+                var total = subtotal * (1 + TAX_RATE);
+                var countEl = document.querySelector('.cart-count');
+                var totalEl = document.querySelector('.cart-total');
+                var summaryCount = document.querySelector('.summary-left');
+                var summaryTotal = document.querySelector('.summary-total-price');
+                if (countEl) countEl.textContent = count + ' 件';
+                if (totalEl) totalEl.textContent = money(total);
+                if (summaryCount) summaryCount.innerHTML = '共 <strong>' + count + '</strong> 件商品';
+                if (summaryTotal) summaryTotal.textContent = money(total);
+            }
+
+            document.querySelectorAll('.cart-item').forEach(function (item) {
+                var qtyEl = item.querySelector('.item-quantity-control span');
+                item.querySelector('.qty-btn:not(.plus)').addEventListener('click', function () {
+                    var qty = parseInt(qtyEl.textContent, 10);
+                    if (qty > 1) {
+                        qtyEl.textContent = qty - 1;
+                    } else {
+                        item.remove();
+                    }
+                    recalc();
+                });
+                item.querySelector('.qty-btn.plus').addEventListener('click', function () {
+                    qtyEl.textContent = parseInt(qtyEl.textContent, 10) + 1;
+                    recalc();
+                });
+            });
+
+            recalc();
+        })();
+    </script>
+
+</body>
+</html>

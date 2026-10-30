@@ -1,0 +1,671 @@
+package com.suntek.checkoutapplication;
+
+import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.hardware.usb.UsbDevice;
+import android.hardware.usb.UsbManager;
+import android.nfc.NfcAdapter;
+import android.nfc.Tag;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.Handler;
+import android.util.Log;
+import android.view.KeyEvent;
+import android.view.View;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import androidx.activity.EdgeToEdge;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowInsetsCompat;
+import androidx.recyclerview.widget.GridLayoutManager;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
+
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.text.DecimalFormat;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Locale;
+
+public class MainActivity extends AppCompatActivity implements ProductAdapter.OnProductClickListener {
+
+    private static final String TAG = "MainActivity";
+    private static final String ACTION_USB_PERMISSION = "com.suntek.checkoutapplication.USB_PERMISSION";
+    private static final long SCAN_TIMEOUT_MS = 200L;
+    private static final double TAX_RATE = 0.05;
+
+    private final StringBuilder scanResult = new StringBuilder();
+    private final Handler scanHandler = new Handler();
+    private final Runnable clearScanResult = () -> scanResult.setLength(0);
+
+    private RecyclerView recyclerProducts;
+    private RecyclerView recyclerOrderItems;
+    private TextView tvTotal;
+    private TextView tvItemCount;
+    private TextView tvStatus;
+    private View btnPay;
+    private View btnPrint;
+    private View btnHold;
+    private View btnClear;
+
+    private List<Product> productList;
+    private HashMap<String, OrderItem> orderItemMap;
+    private List<OrderItem> orderItems;
+    private ProductAdapter productAdapter;
+    private OrderAdapter orderAdapter;
+    private DecimalFormat decimalFormat;
+
+    private UsbManager usbManager;
+    private UsbDevice usbDevice;
+    private UsbPrinterConnection usbPrinter;
+
+    private NfcAdapter nfcAdapter;
+    private PendingIntent nfcPendingIntent;
+    private IntentFilter[] nfcIntentFilters;
+    private String[][] nfcTechLists;
+    private boolean nfcModeEnabled = false;
+
+    private final BroadcastReceiver usbReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (!ACTION_USB_PERMISSION.equals(intent.getAction())) {
+                return;
+            }
+            UsbDevice device;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice.class);
+            } else {
+                device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
+            }
+            boolean granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false);
+            if (granted && device != null) {
+                Log.d(TAG, "USB permission granted: " + device.getDeviceName());
+                usbDevice = device;
+                connectPrinter();
+            } else {
+                showStatus("USB permission denied");
+            }
+        }
+    };
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        
+        // Enable full-screen mode
+        enableFullScreen();
+        
+        EdgeToEdge.enable(this);
+        setContentView(R.layout.activity_main);
+        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main), (v, insets) -> {
+            Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
+            v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom);
+            return insets;
+        });
+
+        usbManager = (UsbManager) getSystemService(USB_SERVICE);
+        usbPrinter = new UsbPrinterConnection(usbManager);
+        registerUsbReceiver();
+
+        initViews();
+        initData();
+        setupRecyclerViews();
+        setupButtonListeners();
+        updateOrderSummary();
+        initUSBConnection();
+        initNFC();
+    }
+
+    private void registerUsbReceiver() {
+        IntentFilter filter = new IntentFilter(ACTION_USB_PERMISSION);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(usbReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(usbReceiver, filter);
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        try {
+            unregisterReceiver(usbReceiver);
+        } catch (Exception ignored) {
+        }
+        if (usbPrinter != null) {
+            usbPrinter.close();
+        }
+        scanHandler.removeCallbacks(clearScanResult);
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        if (event.getAction() == KeyEvent.ACTION_DOWN) {
+            char pressedKey = (char) event.getUnicodeChar();
+            if (event.getKeyCode() == KeyEvent.KEYCODE_ENTER) {
+                if (scanResult.length() > 0) {
+                    String scannedCode = scanResult.toString();
+                    handleScannedCode(scannedCode);
+                    scanResult.setLength(0);
+                    return true;
+                }
+            } else if (isValidScanCharacter(pressedKey)) {
+                scanResult.append(pressedKey);
+                scanHandler.removeCallbacks(clearScanResult);
+                scanHandler.postDelayed(clearScanResult, SCAN_TIMEOUT_MS);
+                return true;
+            }
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
+    private boolean isValidScanCharacter(char c) {
+        return Character.isLetterOrDigit(c) || c == '-' || c == '_' || c == '.' || c == '+' || c == '*' || c == '/';
+    }
+
+    private void handleScannedCode(String code) {
+        Product matchedProduct = findProductById(code);
+        if (matchedProduct == null) {
+            matchedProduct = findProductByName(code);
+        }
+        if (matchedProduct != null) {
+            onProductClick(matchedProduct);
+            showToast("Added: " + matchedProduct.getName());
+        } else {
+            showToast("Product not found: " + code);
+        }
+    }
+
+    private Product findProductById(String id) {
+        for (Product product : productList) {
+            if (product.getId().equals(id)) {
+                return product;
+            }
+        }
+        return null;
+    }
+
+    private Product findProductByName(String name) {
+        for (Product product : productList) {
+            if (product.getName().equalsIgnoreCase(name.trim())) {
+                return product;
+            }
+        }
+        return null;
+    }
+
+    private void showToast(String message) {
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
+    }
+
+    private void initViews() {
+        recyclerProducts = findViewById(R.id.recycler_products);
+        recyclerOrderItems = findViewById(R.id.recycler_order_items);
+        tvTotal = findViewById(R.id.tv_total);
+        tvItemCount = findViewById(R.id.tv_item_count);
+        btnPay = findViewById(R.id.btn_pay);
+        btnPrint = findViewById(R.id.btn_print);
+        btnHold = findViewById(R.id.btn_hold);
+        btnClear = findViewById(R.id.btn_clear);
+        tvStatus = findViewById(R.id.tv_status);
+    }
+
+    private void initData() {
+        decimalFormat = new DecimalFormat("$#,##0.00");
+        productList = new ArrayList<>();
+        productList.add(new Product("6907878050110", "Cola", 3.00, R.drawable.cook));
+        productList.add(new Product("2", "Sprite", 3.00, R.drawable.sprite));
+        productList.add(new Product("6944649700058", "Mineral Water", 2.00, R.drawable.water));
+        productList.add(new Product("4", "Hamburger", 15.00, R.drawable.hambager));
+        productList.add(new Product("5", "French Fries", 8.00, R.drawable.chips));
+        productList.add(new Product("6", "Fried Chicken", 12.00, R.drawable.friedchicken));
+        productList.add(new Product("7", "Hot Dog", 10.00, R.drawable.hotdog));
+        productList.add(new Product("8", "Milk Tea", 10.00, R.drawable.tea));
+        productList.add(new Product("9", "Coffee", 8.00, R.drawable.coffe));
+        productList.add(new Product("10", "Cake", 20.00, R.drawable.cake));
+        productList.add(new Product("48511322", "Ciggie", 22.00, R.drawable.ciggy));
+
+        orderItemMap = new HashMap<>();
+        orderItems = new ArrayList<>();
+    }
+
+    private void initUSBConnection() {
+        if (usbManager == null) {
+            showStatus("Unable to get USB service");
+            return;
+        }
+        HashMap<String, UsbDevice> deviceList = usbManager.getDeviceList();
+        if (deviceList.isEmpty()) {
+            showStatus("USB printer not found");
+            return;
+        }
+
+        for (UsbDevice device : deviceList.values()) {
+            Log.d(TAG, "USB device: " + describeUsbDevice(device));
+        }
+
+        Iterator<UsbDevice> iterator = deviceList.values().iterator();
+        while (iterator.hasNext()) {
+            UsbDevice device = iterator.next();
+            if (UsbPrinterConnection.isPrinterDevice(device)) {
+                usbDevice = device;
+                break;
+            }
+        }
+
+        if (usbDevice == null) {
+            showStatus("USB printer not found");
+            return;
+        }
+
+        if (usbManager.hasPermission(usbDevice)) {
+            connectPrinter();
+        } else {
+            PendingIntent permissionIntent = PendingIntent.getBroadcast(
+                    this,
+                    0,
+                    new Intent(ACTION_USB_PERMISSION).setPackage(getPackageName()),
+                    PendingIntent.FLAG_IMMUTABLE
+            );
+            usbManager.requestPermission(usbDevice, permissionIntent);
+            showStatus("Grant USB permission in the dialog");
+        }
+    }
+
+    private String describeUsbDevice(UsbDevice device) {
+        StringBuilder builder = new StringBuilder();
+        builder.append(device.getDeviceName())
+                .append(" VID:")
+                .append(device.getVendorId())
+                .append(" PID:")
+                .append(device.getProductId())
+                .append(" IFACES:")
+                .append(device.getInterfaceCount());
+        for (int i = 0; i < device.getInterfaceCount(); i++) {
+            builder.append(" [")
+                    .append(i)
+                    .append(":")
+                    .append(device.getInterface(i).getInterfaceClass())
+                    .append("/")
+                    .append(device.getInterface(i).getInterfaceSubclass())
+                    .append("]");
+        }
+        return builder.toString();
+    }
+
+    private void connectPrinter() {
+        if (usbDevice == null) {
+            showStatus("USB printer not selected");
+            return;
+        }
+        String error = usbPrinter.connect(usbDevice);
+        if (error == null) {
+            showStatus("Printer connected");
+        } else {
+            showStatus("Printer connect failed: " + error);
+        }
+    }
+
+    private void initNFC() {
+        try {
+            nfcAdapter = NfcAdapter.getDefaultAdapter(this);
+            if (nfcAdapter == null) {
+                showStatus("NFC not supported");
+                return;
+            }
+            if (!nfcAdapter.isEnabled()) {
+                showStatus("Enable NFC in system settings");
+                return;
+            }
+            initNfcDispatcher();
+        } catch (Exception e) {
+            Log.e(TAG, "initNFC failed", e);
+            showStatus("NFC init failed");
+        }
+    }
+
+    private void initNfcDispatcher() {
+        Intent intent = new Intent(this, getClass());
+        intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            flags |= PendingIntent.FLAG_MUTABLE;
+        }
+        nfcPendingIntent = PendingIntent.getActivity(this, 0, intent, flags);
+        IntentFilter ndef = new IntentFilter(NfcAdapter.ACTION_NDEF_DISCOVERED);
+        IntentFilter tag = new IntentFilter(NfcAdapter.ACTION_TAG_DISCOVERED);
+        IntentFilter tech = new IntentFilter(NfcAdapter.ACTION_TECH_DISCOVERED);
+        try {
+            ndef.addDataType("*/*");
+        } catch (Exception e) {
+            Log.e(TAG, "addDataType failed", e);
+        }
+        nfcIntentFilters = new IntentFilter[]{ndef, tag, tech};
+        nfcTechLists = new String[][]{
+                new String[]{android.nfc.tech.Ndef.class.getName()},
+                new String[]{android.nfc.tech.NfcA.class.getName()},
+                new String[]{android.nfc.tech.NfcB.class.getName()},
+                new String[]{android.nfc.tech.NfcF.class.getName()},
+                new String[]{android.nfc.tech.NfcV.class.getName()},
+                new String[]{android.nfc.tech.IsoDep.class.getName()},
+                new String[]{android.nfc.tech.MifareClassic.class.getName()},
+                new String[]{android.nfc.tech.MifareUltralight.class.getName()},
+                new String[]{android.nfc.tech.NdefFormatable.class.getName()}
+        };
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (nfcModeEnabled && nfcAdapter != null && nfcAdapter.isEnabled()) {
+            try {
+                nfcAdapter.enableForegroundDispatch(this, nfcPendingIntent, nfcIntentFilters, nfcTechLists);
+            } catch (Exception e) {
+                Log.e(TAG, "enableForegroundDispatch failed", e);
+            }
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        if (nfcAdapter != null) {
+            try {
+                nfcAdapter.disableForegroundDispatch(this);
+            } catch (Exception e) {
+                Log.e(TAG, "disableForegroundDispatch failed", e);
+            }
+        }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        if (nfcModeEnabled &&
+                (NfcAdapter.ACTION_TAG_DISCOVERED.equals(intent.getAction())
+                        || NfcAdapter.ACTION_NDEF_DISCOVERED.equals(intent.getAction())
+                        || NfcAdapter.ACTION_TECH_DISCOVERED.equals(intent.getAction()))) {
+            Tag tag = intent.getParcelableExtra(NfcAdapter.EXTRA_TAG);
+            if (tag != null) {
+                handleNFCDetected(tag);
+            }
+        }
+    }
+
+    private void enableNFCForegroundDispatch() {
+        if (nfcAdapter != null && nfcAdapter.isEnabled()) {
+            try {
+                nfcAdapter.enableForegroundDispatch(this, nfcPendingIntent, nfcIntentFilters, nfcTechLists);
+            } catch (Exception e) {
+                Log.e(TAG, "enableNFCForegroundDispatch failed", e);
+                showStatus("Enable NFC failed");
+            }
+        }
+    }
+
+    private void disableNFCForegroundDispatch() {
+        if (nfcAdapter != null) {
+            try {
+                nfcAdapter.disableForegroundDispatch(this);
+            } catch (Exception e) {
+                Log.e(TAG, "disableNFCForegroundDispatch failed", e);
+            }
+        }
+    }
+
+    private void handleNFCDetected(Tag tag) {
+        Toast.makeText(this, "NFC card detected, processing payment...", Toast.LENGTH_SHORT).show();
+        nfcModeEnabled = false;
+        disableNFCForegroundDispatch();
+
+        double subtotal = calculateSubtotal();
+        double tax = calculateTax(subtotal);
+        double total = calculateTotal(subtotal, tax);
+        printReceipt("swipe card payment", subtotal, tax, total);
+    }
+
+    private void showStatus(String message) {
+        runOnUiThread(() -> tvStatus.setText("Status: " + message));
+    }
+
+    private void setupRecyclerViews() {
+        productAdapter = new ProductAdapter(productList, this);
+        recyclerProducts.setLayoutManager(new GridLayoutManager(this, 3));
+        recyclerProducts.setAdapter(productAdapter);
+
+        orderAdapter = new OrderAdapter(orderItems);
+        recyclerOrderItems.setLayoutManager(new LinearLayoutManager(this));
+        recyclerOrderItems.setAdapter(orderAdapter);
+    }
+
+    private void setupButtonListeners() {
+        btnPay.setOnClickListener(v -> handlePayment("cash payment"));
+        btnPrint.setOnClickListener(v -> handlePaymentNFC("swipe card payment"));
+        btnHold.setOnClickListener(v -> handleHoldOrder());
+        btnClear.setOnClickListener(v -> clearOrder());
+        findViewById(R.id.tv_clear_cart).setOnClickListener(v -> clearOrder());
+    }
+
+    private void handlePaymentNFC(String paymentMethod) {
+        if (orderItems.isEmpty()) {
+            Toast.makeText(this, "The order is empty, please add products first", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (nfcAdapter == null) {
+            showStatus("NFC not supported");
+            return;
+        }
+        if (!nfcAdapter.isEnabled()) {
+            showStatus("Enable NFC in settings");
+            return;
+        }
+        nfcModeEnabled = true;
+        enableNFCForegroundDispatch();
+        Toast.makeText(this, "Please tap card...", Toast.LENGTH_LONG).show();
+        showStatus("Waiting for NFC card...");
+    }
+
+    private void handleHoldOrder() {
+        if (orderItems.isEmpty()) {
+            Toast.makeText(this, "The order is empty", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        Toast.makeText(this, "Order held", Toast.LENGTH_SHORT).show();
+    }
+
+    @Override
+    public void onProductClick(Product product) {
+        String productId = product.getId();
+        if (orderItemMap.containsKey(productId)) {
+            orderItemMap.get(productId).incrementQuantity();
+        } else {
+            OrderItem newOrderItem = new OrderItem(product);
+            orderItemMap.put(productId, newOrderItem);
+            orderItems.add(newOrderItem);
+        }
+        orderAdapter.notifyDataSetChanged();
+        updateOrderSummary();
+    }
+
+    private void updateOrderSummary() {
+        double subtotal = calculateSubtotal();
+        double tax = calculateTax(subtotal);
+        double total = calculateTotal(subtotal, tax);
+        tvTotal.setText(decimalFormat.format(total));
+
+        int itemCount = 0;
+        for (OrderItem item : orderItems) {
+            itemCount += item.getQuantity();
+        }
+        tvItemCount.setText(itemCount + " items");
+    }
+
+    private double calculateSubtotal() {
+        double subtotal = 0.0;
+        for (OrderItem item : orderItems) {
+            subtotal += item.getTotalPrice();
+        }
+        return subtotal;
+    }
+
+    private double calculateTax(double subtotal) {
+        return subtotal * TAX_RATE;
+    }
+
+    private double calculateTotal(double subtotal, double tax) {
+        return subtotal + tax;
+    }
+
+    private void handlePayment(String paymentMethod) {
+        if (orderItems.isEmpty()) {
+            Toast.makeText(this, "The order is empty, please add products first", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        double subtotal = calculateSubtotal();
+        double tax = calculateTax(subtotal);
+        double total = calculateTotal(subtotal, tax);
+        Toast.makeText(this, "Selected " + paymentMethod + ", total: " + decimalFormat.format(total), Toast.LENGTH_LONG).show();
+        printReceipt(paymentMethod, subtotal, tax, total);
+    }
+
+    private void printReceipt(String paymentMethod, double subtotal, double tax, double total) {
+        if (usbPrinter == null || !usbPrinter.isConnected()) {
+            showStatus("Printer not connected");
+            return;
+        }
+        new Thread(() -> {
+            try {
+                byte[] receipt = buildReceiptData(paymentMethod, subtotal, tax, total);
+                int written = usbPrinter.write(receipt, 3000);
+                runOnUiThread(() -> {
+                    if (written > 0) {
+                        showStatus("Receipt printed successfully");
+                        Toast.makeText(this, "Receipt printed successfully", Toast.LENGTH_SHORT).show();
+                        clearOrder();
+                    } else {
+                        showStatus("Receipt print failed");
+                        Toast.makeText(this, "Receipt print failed", Toast.LENGTH_LONG).show();
+                    }
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    showStatus("Receipt print failed: " + e.getMessage());
+                    Toast.makeText(this, "Receipt print failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                });
+            }
+        }).start();
+    }
+
+    private byte[] buildReceiptData(String paymentMethod, double subtotal, double tax, double total) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(0x1B);
+        out.write(0x40);
+        out.write(0x1B);
+        out.write(0x61);
+        out.write(0x01);
+        out.write(0x1B);
+        out.write(0x45);
+        out.write(0x01);
+        writeAscii(out, "SUNTEK CHECKOUT\n");
+        out.write(0x1B);
+        out.write(0x45);
+        out.write(0x00);
+        out.write(0x1B);
+        out.write(0x61);
+        out.write(0x00);
+        writeAscii(out, "--------------------------------\n");
+        writeAscii(out, "Order: " + System.currentTimeMillis() + "\n");
+        writeAscii(out, "Time : " + new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(new Date()) + "\n");
+        writeAscii(out, "--------------------------------\n");
+        writeAscii(out, "Item        Price  Qty   Total\n");
+        writeAscii(out, "--------------------------------\n");
+        for (OrderItem item : orderItems) {
+            String name = item.getProduct().getName();
+            if (name.length() > 10) {
+                name = name.substring(0, 10);
+            }
+            String line = String.format(Locale.US, "%-10s %5.2f %4d %7.2f\n",
+                    name,
+                    item.getProduct().getPrice(),
+                    item.getQuantity(),
+                    item.getTotalPrice());
+            writeAscii(out, line);
+        }
+        writeAscii(out, "--------------------------------\n");
+        writeAscii(out, String.format(Locale.US, "Subtotal:           %7.2f\n", subtotal));
+        writeAscii(out, String.format(Locale.US, "Tax(5%%):            %7.2f\n", tax));
+        writeAscii(out, String.format(Locale.US, "Total:              %7.2f\n", total));
+        writeAscii(out, "--------------------------------\n");
+        writeAscii(out, "Payment: " + paymentMethod + "\n");
+        writeAscii(out, "Thank you!\n\n");
+        out.write(0x1B);
+        out.write(0x64);
+        out.write(0x03);
+        out.write(0x1D);
+        out.write(0x56);
+        out.write(0x42);
+        out.write(0x00);
+        return out.toByteArray();
+    }
+
+    private void writeAscii(ByteArrayOutputStream out, String text) {
+        byte[] bytes = text.getBytes(StandardCharsets.US_ASCII);
+        out.write(bytes, 0, bytes.length);
+    }
+
+    private void clearOrder() {
+        orderItemMap.clear();
+        orderItems.clear();
+        orderAdapter.notifyDataSetChanged();
+        updateOrderSummary();
+        Toast.makeText(this, "Order cleared", Toast.LENGTH_SHORT).show();
+    }
+    
+    /**
+     * Enable full-screen mode by hiding system bars (navigation bar and status bar).
+     * Called in onWindowFocusChanged to ensure the window is fully attached.
+     */
+    private boolean fullscreenEnabled = false;
+    
+    private void enableFullScreen() {
+        fullscreenEnabled = true;
+        setSystemUIVisibility();
+    }
+    
+    private void setSystemUIVisibility() {
+        if (!fullscreenEnabled) return;
+        
+        View decorView = getWindow().getDecorView();
+        int uiOptions = View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                     | View.SYSTEM_UI_FLAG_FULLSCREEN
+                     | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                     | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                     | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                     | View.SYSTEM_UI_FLAG_LAYOUT_STABLE;
+        decorView.setSystemUiVisibility(uiOptions);
+        
+        getWindow().setDecorFitsSystemWindows(false);
+    }
+    
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus && fullscreenEnabled) {
+            // Re-apply fullscreen flags when window gains focus
+            // This handles gestures that show system bars
+            Handler handler = new Handler();
+            handler.postDelayed(() -> setSystemUIVisibility(), 100);
+        }
+    }
+}

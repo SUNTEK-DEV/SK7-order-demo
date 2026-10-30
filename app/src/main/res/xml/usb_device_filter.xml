@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Printer: class 7 (printer) devices. Exact IDs of the bundled SP-POS896. -->
+    <usb-device class="7" />
+    <usb-device vendor-id="1155" product-id="22339" />
+</resources>

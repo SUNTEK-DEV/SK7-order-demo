@@ -1,0 +1,595 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Landscape layout: product pane on the left (header + search + category chips
+  + 3-column grid), checkout panel on the right. Keeps the SAME view IDs the
+  MainActivity code expects, so the app auto-swaps between portrait/landscape.
+-->
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/main"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    tools:context=".MainActivity"
+    android:descendantFocusability="beforeDescendants"
+    android:focusableInTouchMode="true"
+    android:background="@color/primary_bg">
+
+    <!-- ============ Left pane: products ============ -->
+    <LinearLayout
+        android:id="@+id/left_pane"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:layout_weight="5"
+        android:background="@color/primary_bg"
+        app:layout_constraintHorizontal_weight="5"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toStartOf="@id/right_panel"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent">
+
+        <!-- Header: warm Burger King style orange gradient -->
+        <androidx.constraintlayout.widget.ConstraintLayout
+            android:id="@+id/header_bar"
+            android:layout_width="match_parent"
+            android:layout_height="60dp"
+            android:background="@drawable/header_bg"
+            android:paddingHorizontal="16dp">
+
+            <TextView
+                android:id="@+id/tv_shop_name"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Suntek Supermarket"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                android:textColor="@color/white"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toTopOf="parent"
+                app:layout_constraintBottom_toBottomOf="parent" />
+
+            <TextView
+                android:id="@+id/tv_shop_status"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text=" Open "
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:textColor="@color/brand_brown"
+                android:background="@color/brand_yellow"
+                android:paddingHorizontal="8dp"
+                android:paddingVertical="3dp"
+                app:layout_constraintStart_toEndOf="@id/tv_shop_name"
+                app:layout_constraintTop_toTopOf="parent"
+                app:layout_constraintBottom_toBottomOf="parent"
+                android:layout_marginStart="8dp" />
+
+            <TextView
+                android:id="@+id/tv_cashier_meta"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Cashier: David"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:textColor="#FFE3CC"
+                android:gravity="end"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintTop_toTopOf="parent"
+                app:layout_constraintBottom_toBottomOf="parent" />
+
+        </androidx.constraintlayout.widget.ConstraintLayout>
+
+        <!-- Search bar sitting on the same warm gradient -->
+        <LinearLayout
+            android:id="@+id/search_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/header_bg"
+            android:paddingHorizontal="16dp"
+            android:paddingBottom="14dp"
+            android:orientation="horizontal">
+
+            <LinearLayout
+                android:id="@+id/search_box"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:background="@drawable/search_bg"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingHorizontal="12dp">
+
+                <ImageView
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:src="@drawable/ic_search"
+                    android:contentDescription="Search"
+                    app:tint="@color/text_muted" />
+
+                <EditText
+                    android:id="@+id/et_search"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:layout_marginStart="8dp"
+                    android:background="@null"
+                    android:focusableInTouchMode="true"
+                    android:hint="Search product name or barcode"
+                    android:imeOptions="actionSearch"
+                    android:inputType="text"
+                    android:maxLines="1"
+                    android:textColor="@color/text_main"
+                    android:textColorHint="@color/text_muted"
+                    android:textSize="15sp" />
+
+                <TextView
+                    android:id="@+id/btn_clear_search"
+                    android:layout_width="32dp"
+                    android:layout_height="32dp"
+                    android:background="@drawable/search_clear_bg"
+                    android:gravity="center"
+                    android:text="✕"
+                    android:textColor="@color/white"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:visibility="gone" />
+
+            </LinearLayout>
+
+        </LinearLayout>
+
+        <!-- Category chips -->
+        <HorizontalScrollView
+            android:id="@+id/category_scroll"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:scrollbars="none"
+            android:background="@color/warm_surface"
+            android:paddingVertical="12dp"
+            android:paddingHorizontal="16dp">
+
+            <LinearLayout
+                android:id="@+id/category_container"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/chip_all"
+                    android:layout_width="wrap_content"
+                    android:layout_height="40dp"
+                    android:background="@drawable/chip_active_bg"
+                    android:gravity="center"
+                    android:paddingHorizontal="20dp"
+                    android:text="All"
+                    android:textColor="@color/white"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:layout_marginEnd="10dp" />
+
+                <TextView
+                    android:id="@+id/chip_drinks"
+                    android:layout_width="wrap_content"
+                    android:layout_height="40dp"
+                    android:background="@drawable/chip_bg"
+                    android:gravity="center"
+                    android:paddingHorizontal="20dp"
+                    android:text="Drinks"
+                    android:textColor="@color/brand_brown"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:layout_marginEnd="10dp" />
+
+                <TextView
+                    android:id="@+id/chip_snacks"
+                    android:layout_width="wrap_content"
+                    android:layout_height="40dp"
+                    android:background="@drawable/chip_bg"
+                    android:gravity="center"
+                    android:paddingHorizontal="20dp"
+                    android:text="Snacks"
+                    android:textColor="@color/brand_brown"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:layout_marginEnd="10dp" />
+
+                <TextView
+                    android:id="@+id/chip_daily_needs"
+                    android:layout_width="wrap_content"
+                    android:layout_height="40dp"
+                    android:background="@drawable/chip_bg"
+                    android:gravity="center"
+                    android:paddingHorizontal="20dp"
+                    android:text="Daily Needs"
+                    android:textColor="@color/brand_brown"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:layout_marginEnd="10dp" />
+
+                <TextView
+                    android:id="@+id/chip_fresh"
+                    android:layout_width="wrap_content"
+                    android:layout_height="40dp"
+                    android:background="@drawable/chip_bg"
+                    android:gravity="center"
+                    android:paddingHorizontal="20dp"
+                    android:text="Fresh"
+                    android:textColor="@color/brand_brown"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:layout_marginEnd="10dp" />
+
+            </LinearLayout>
+        </HorizontalScrollView>
+
+        <!-- Divider line -->
+        <View
+            android:id="@+id/divider_top"
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/border_color" />
+
+        <!-- Product grid (3 columns in landscape) -->
+        <androidx.core.widget.NestedScrollView
+            android:id="@+id/scroll_view"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:padding="6dp"
+            android:clipToPadding="false"
+            android:fillViewport="true">
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/recycler_products"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                tools:listitem="@layout/item_product" />
+
+        </androidx.core.widget.NestedScrollView>
+
+    </LinearLayout>
+
+    <!-- ============ Right pane: checkout ============ -->
+    <LinearLayout
+        android:id="@+id/right_panel"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:background="@color/warm_surface"
+        android:paddingHorizontal="16dp"
+        android:paddingTop="12dp"
+        android:paddingBottom="10dp"
+        android:elevation="4dp"
+        app:layout_constraintHorizontal_weight="3"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toEndOf="@id/left_pane"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent">
+
+        <!-- Collapsed header bar: the whole row toggles the bill (bigger touch area) -->
+        <LinearLayout
+            android:id="@+id/panel_header"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingTop="4dp"
+            android:paddingBottom="8dp">
+
+            <TextView
+                android:id="@+id/tv_order_title"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Pending Order (click to expand)"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:textColor="@color/brand_brown"
+                android:maxLines="1"
+                android:ellipsize="end" />
+
+            <TextView
+                android:id="@+id/tv_clear_cart"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Clear"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:textColor="@color/btn_clear"
+                android:layout_marginEnd="4dp"
+                android:visibility="gone"
+                android:paddingVertical="4dp" />
+
+            <ImageView
+                android:id="@+id/btn_panel_toggle"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:layout_marginStart="8dp"
+                android:padding="10dp"
+                android:src="@drawable/ic_chevron_up"
+                android:background="@drawable/toggle_btn_ripple"
+                android:scaleType="fitCenter"
+                android:contentDescription="Expand order panel"
+                android:clickable="true"
+                android:focusable="true" />
+
+        </LinearLayout>
+
+        <!-- Expandable content: cart list (collapsed by default) -->
+        <LinearLayout
+            android:id="@+id/panel_content"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <!-- Divider -->
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="@color/border_color" />
+
+            <!-- Cart items list: fixed height so the expand animation can
+                 measure panel_content at wrap_content height. -->
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/recycler_order_items"
+                android:layout_width="match_parent"
+                android:layout_height="240dp"
+                tools:listitem="@layout/item_order" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="8dp"
+                android:background="@color/border_color" />
+
+        </LinearLayout>
+
+        <!-- Total bar: sits above the action buttons, never collapses -->
+        <LinearLayout
+            android:id="@+id/summary_row"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingVertical="10dp"
+            android:background="@color/primary_bg">
+
+            <TextView
+                android:id="@+id/tv_item_count"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="0 items"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:textColor="@color/text_muted" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Total: "
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:textColor="@color/brand_brown" />
+
+            <TextView
+                android:id="@+id/tv_total"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="$0.00"
+                android:textSize="26sp"
+                android:textStyle="bold"
+                android:textColor="@color/price_color"
+                android:layout_marginStart="6dp" />
+
+        </LinearLayout>
+
+        <!-- Four action buttons (never collapses) -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingTop="8dp">
+
+            <LinearLayout
+                android:id="@+id/btn_pay"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginEnd="5dp"
+                android:background="@drawable/btn_pay_bg"
+                android:gravity="center"
+                android:orientation="vertical"
+                android:paddingVertical="8dp"
+                android:clickable="true"
+                android:focusable="true">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="¥"
+                    android:textColor="@color/white"
+                    android:textSize="20sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Pay"
+                    android:textColor="@color/white"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:layout_marginTop="1dp" />
+
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/btn_print"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginHorizontal="5dp"
+                android:background="@drawable/btn_print_bg"
+                android:gravity="center"
+                android:orientation="vertical"
+                android:paddingVertical="8dp"
+                android:clickable="true"
+                android:focusable="true">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="💳"
+                    android:textColor="@color/btn_print"
+                    android:textSize="20sp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Card Pay"
+                    android:textColor="@color/btn_print"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:layout_marginTop="1dp" />
+
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/btn_hold"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginHorizontal="5dp"
+                android:background="@drawable/btn_hold_bg"
+                android:gravity="center"
+                android:orientation="vertical"
+                android:paddingVertical="8dp"
+                android:clickable="true"
+                android:focusable="true">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="📋"
+                    android:textColor="@color/btn_hold"
+                    android:textSize="20sp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Hold"
+                    android:textColor="@color/btn_hold"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:layout_marginTop="1dp" />
+
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/btn_clear"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginStart="5dp"
+                android:background="@drawable/btn_clear_bg"
+                android:gravity="center"
+                android:orientation="vertical"
+                android:paddingVertical="8dp"
+                android:clickable="true"
+                android:focusable="true">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="✕"
+                    android:textColor="@color/btn_clear"
+                    android:textSize="20sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Clear"
+                    android:textColor="@color/btn_clear"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:layout_marginTop="1dp" />
+
+            </LinearLayout>
+
+        </LinearLayout>
+
+        <!-- Status bar -->
+        <TextView
+            android:id="@+id/tv_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Status: Disconnected"
+            android:textSize="11sp"
+            android:textColor="@color/text_muted"
+            android:paddingTop="6dp" />
+
+    </LinearLayout>
+
+    <!-- Scrim: dims the product background so all eyes go to the shaking NFC card -->
+    <View
+        android:id="@+id/nfc_scrim"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:background="@color/nfc_scrim"
+        android:visibility="gone"
+        android:clickable="false"
+        android:focusable="false"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <!-- NFC payment prompt: zooms in/out while waiting for the card -->
+    <LinearLayout
+        android:id="@+id/nfc_prompt"
+        android:layout_width="wrap_content"
+        android:layout_height="260dp"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:visibility="gone"
+        android:clickable="false"
+        android:focusable="false"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
+
+        <ImageView
+            android:id="@+id/iv_nfc_prompt"
+            android:layout_width="170dp"
+            android:layout_height="170dp"
+            android:src="@drawable/nfc"
+            android:scaleType="fitCenter"
+            android:padding="18dp"
+            android:background="@drawable/nfc_prompt_bg"
+            android:elevation="14dp"
+            android:clickable="false"
+            android:focusable="false"
+            android:contentDescription="Tap NFC card to pay" />
+
+        <TextView
+            android:id="@+id/tv_nfc_prompt_label"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:background="@drawable/chip_active_bg"
+            android:paddingHorizontal="20dp"
+            android:paddingVertical="9dp"
+            android:text="Please tap card to pay"
+            android:textSize="17sp"
+            android:textStyle="bold"
+            android:textColor="@color/white"
+            android:elevation="8dp"
+            android:clickable="false"
+            android:focusable="false" />
+
+    </LinearLayout>
+
+</androidx.constraintlayout.widget.ConstraintLayout>

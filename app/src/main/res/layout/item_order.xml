@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:paddingVertical="9dp"
+    android:background="@android:color/transparent"
+    android:layout_marginBottom="3dp">
+
+    <!-- Item name and unit price -->
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/tv_order_item_name"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Item Name"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:textColor="@color/text_main"
+            android:maxLines="1"
+            android:ellipsize="end" />
+
+        <TextView
+            android:id="@+id/tv_order_item_price"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="$0.00"
+            android:textSize="13sp"
+            android:textColor="@color/text_muted"
+            android:layout_marginTop="2dp" />
+
+    </LinearLayout>
+
+    <!-- Quantity control -->
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:background="@drawable/qty_box_bg"
+        android:paddingHorizontal="5dp"
+        android:paddingVertical="4dp">
+
+        <TextView
+            android:id="@+id/btn_qty_minus"
+            android:layout_width="30dp"
+            android:layout_height="30dp"
+            android:gravity="center"
+            android:background="@drawable/qty_minus_btn"
+            android:text="-"
+            android:textSize="17sp"
+            android:textStyle="bold"
+            android:textColor="@color/text_muted"
+            android:clickable="true"
+            android:focusable="true" />
+
+        <TextView
+            android:id="@+id/tv_order_item_quantity"
+            android:layout_width="34dp"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:text="1"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            android:textColor="@color/text_main" />
+
+        <TextView
+            android:id="@+id/btn_qty_plus"
+            android:layout_width="30dp"
+            android:layout_height="30dp"
+            android:gravity="center"
+            android:background="@drawable/qty_plus_btn"
+            android:text="+"
+            android:textSize="17sp"
+            android:textStyle="bold"
+            android:textColor="@color/white"
+            android:clickable="true"
+            android:focusable="true" />
+
+    </LinearLayout>
+
+    <!-- Item total price -->
+    <TextView
+        android:id="@+id/tv_order_item_total"
+        android:layout_width="76dp"
+        android:layout_height="wrap_content"
+        android:text="$0.00"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        android:textColor="@color/brand_red"
+        android:gravity="end"
+        android:layout_marginStart="12dp" />
+
+</LinearLayout>
