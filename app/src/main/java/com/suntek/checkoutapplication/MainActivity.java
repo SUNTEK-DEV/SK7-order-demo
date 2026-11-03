@@ -121,6 +121,7 @@ public class MainActivity extends AppCompatActivity
     private View nfcPrompt;
     private View nfcScrim;
     private View ivNfcPrompt;
+    private TextView tvNfcPromptLabel;
     private AnimatorSet nfcPromptAnimator;
     private boolean nfcPromptWanted = false;
     private boolean panelExpanded = false;
@@ -143,6 +144,59 @@ public class MainActivity extends AppCompatActivity
     private boolean wakeLoading = false;
     private final Handler voiceHandler = new Handler(Looper.getMainLooper());
     private String lastWakeKeyword = "";
+
+    // ============ 语音支付（全程免接触） ============
+    /** true 表示 Visa / Mastercard 卡片已弹出、正在等「确认支付 / check」。 */
+    private volatile boolean voicePaymentPending = false;
+    private static final long VOICE_PAYMENT_TIMEOUT_MS = 45000L;
+    /** 播报结束后的静音起点，用于判断"真的安静下来了"再开麦。 */
+    private long voiceQuietSinceMs = 0;
+    /** true 表示"这轮播报念完就自动开麦"，与支付等待无关（唤醒欢迎语走这条）。 */
+    private volatile boolean voiceRelistenArmed = false;
+    private final Runnable voicePaymentTimeout = () -> {
+        if (voicePaymentPending) {
+            Log.w(TAG, "voicePaymentTimeout: no confirmation in "
+                    + VOICE_PAYMENT_TIMEOUT_MS + "ms");
+            cancelVoicePayment(true);
+        }
+    };
+    /** 播报结束后自动重新开麦：支付确认、或唤醒欢迎语念完。 */
+    private final Runnable voiceRelistenRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!voicePaymentPending && !voiceRelistenArmed) {
+                return;
+            }
+            if (voiceAnnouncer != null && voiceAnnouncer.isBusy()) {
+                voiceQuietSinceMs = 0;
+                voiceHandler.postDelayed(this, 150);
+                return;
+            }
+            // 讯飞合成是"先联网再出声"，isBusy 可能早于真实播放结束，
+            // 所以要求安静满 700ms 再开麦，否则会把播报当成顾客说话。
+            long now = android.os.SystemClock.uptimeMillis();
+            if (voiceQuietSinceMs == 0) {
+                voiceQuietSinceMs = now;
+                voiceHandler.postDelayed(this, 150);
+                return;
+            }
+            if (now - voiceQuietSinceMs < 700) {
+                voiceHandler.postDelayed(this, 100);
+                return;
+            }
+            if (isVoiceListening) {
+                return;
+            }
+            if (ContextCompat.checkSelfPermission(MainActivity.this,
+                    Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                return;
+            }
+            Log.i(TAG, "voiceRelisten: reopen mic (paymentPending="
+                    + voicePaymentPending + ")");
+            voiceRelistenArmed = false;
+            startVoiceListening();
+        }
+    };
 
     private List<Product> productList;
     private HashMap<String, OrderItem> orderItemMap;
@@ -230,6 +284,9 @@ public class MainActivity extends AppCompatActivity
         usbManager = (UsbManager) getSystemService(USB_SERVICE);
         usbPrinter = new UsbPrinterConnection(usbManager);
         registerUsbReceiver();
+        if (BuildConfig.DEBUG) {
+            registerDebugVoiceReceiver();
+        }
 
         initViews();
         initData();
@@ -266,6 +323,104 @@ public class MainActivity extends AppCompatActivity
         }
     }
 
+    // ============ 调试钩子（仅 debug 包） ============
+    /**
+     * adb 注入一句"识别结果"，用来在没有麦克风的场合验证意图路由：
+     * adb shell am broadcast -a com.suntek.checkoutapplication.DEBUG_VOICE --es text "我要两个鸡肉卷"
+     * 加 --ez speak true 则改成让机器把这句念出来（用于验证唤醒词）。
+     */
+    private static final String ACTION_DEBUG_VOICE = "com.suntek.checkoutapplication.DEBUG_VOICE";
+
+    private final BroadcastReceiver debugVoiceReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            String text = intent.getStringExtra("text");
+            boolean speak = intent.getBooleanExtra("speak", false);
+            // --es wake "Hello, I'd like to order" 直接模拟一次唤醒（英文唤醒词模型听不出来时用）
+            String wake = intent.getStringExtra("wake");
+            // --es kwsTest "hello" [--es kwsVcn aisjiuxu]
+            // 合成一段语音直接灌给唤醒模型，测「这个词到底能不能唤醒」。
+            // 不能用外放测：板子的 VOICE_RECOGNITION 音源带 AEC，会把自己放的声音抵消掉。
+            String kwsTest = intent.getStringExtra("kwsTest");
+            String kwsAsr = intent.getStringExtra("kwsAsr");
+            Log.i(TAG, "debugVoice: speak=" + speak + ", wake=[" + wake
+                    + "], kwsTest=[" + kwsTest + "], kwsAsr=[" + kwsAsr + "], text=[" + text + "]");
+            if (intent.getBooleanExtra("dlKws", false)) {
+                new Thread(() -> {
+                    if (wakeDetector == null) {
+                        Log.w(TAG, "dlKws: 唤醒模块未就绪");
+                        return;
+                    }
+                    wakeDetector.downloadEnglishModelForDebug();
+                }, "KwsDownload").start();
+                return;
+            }
+            if (kwsAsr != null && !kwsAsr.isEmpty()) {
+                String vcnExtra = intent.getStringExtra("kwsVcn");
+                final String vcn = (vcnExtra == null || vcnExtra.isEmpty()) ? "aisjiuxu" : vcnExtra;
+                new Thread(() -> {
+                    if (voiceAnnouncer == null || wakeDetector == null) {
+                        Log.w(TAG, "kwsAsr: 语音模块未就绪");
+                        return;
+                    }
+                    byte[] pcm = voiceAnnouncer.synthesizeToPcm(kwsAsr, vcn);
+                    boolean en = intent.getBooleanExtra("kwsLangEn", false);
+                    String heard = wakeDetector.debugTranscribe(pcm, en);
+                    Log.i(TAG, "kwsAsr 结果: text=[" + kwsAsr + "] vcn=" + vcn
+                            + " model=" + (en ? "en" : "zh") + " => " + heard);
+                }, "KwsAsrThread").start();
+                return;
+            }
+            if (kwsTest != null && !kwsTest.isEmpty()) {
+                String vcnExtra = intent.getStringExtra("kwsVcn");
+                final String vcn = (vcnExtra == null || vcnExtra.isEmpty()) ? "aisjiuxu" : vcnExtra;
+                new Thread(() -> {
+                    if (voiceAnnouncer == null || wakeDetector == null) {
+                        Log.w(TAG, "kwsTest: 语音模块未就绪");
+                        return;
+                    }
+                    byte[] pcm = voiceAnnouncer.synthesizeToPcm(kwsTest, vcn);
+                    boolean en = intent.getBooleanExtra("kwsLangEn", false);
+                    String hit = wakeDetector.debugDetect(pcm, en);
+                    Log.i(TAG, "kwsTest 结果: text=[" + kwsTest + "] vcn=" + vcn
+                            + " model=" + (en ? "en" : "zh")
+                            + " => " + (hit == null ? "未命中" : hit));
+                }, "KwsTestThread").start();
+                return;
+            }
+            if (wake != null && !wake.isEmpty()) {
+                runOnUiThread(() -> onWakeWordDetected(wake));
+                return;
+            }
+            if (text == null || text.isEmpty()) {
+                return;
+            }
+            if (speak) {
+                if (voiceAnnouncer != null) {
+                    // 跟随界面语言，否则念中文也用英文音色，实机测唤醒时会失真
+                    voiceAnnouncer.announce(text, SpeechConfig.getLangByTag(currentLangTag).locale);
+                }
+                return;
+            }
+            runOnUiThread(() -> {
+                if (isVoiceListening) {
+                    stopVoiceListening();
+                }
+                finishVoiceRecognition(text);
+            });
+        }
+    };
+
+    private void registerDebugVoiceReceiver() {
+        IntentFilter filter = new IntentFilter(ACTION_DEBUG_VOICE);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(debugVoiceReceiver, filter, Context.RECEIVER_EXPORTED);
+        } else {
+            registerReceiver(debugVoiceReceiver, filter);
+        }
+        Log.i(TAG, "debug voice receiver ready: " + ACTION_DEBUG_VOICE);
+    }
+
     @Override
     protected void onDestroy() {
         super.onDestroy();
@@ -277,6 +432,14 @@ public class MainActivity extends AppCompatActivity
             unregisterReceiver(usbReceiver);
         } catch (Exception ignored) {
         }
+        if (BuildConfig.DEBUG) {
+            try {
+                unregisterReceiver(debugVoiceReceiver);
+            } catch (Exception ignored) {
+            }
+        }
+        voiceHandler.removeCallbacks(voicePaymentTimeout);
+        voiceHandler.removeCallbacks(voiceRelistenRunnable);
         if (usbPrinter != null) {
             usbPrinter.close();
         }
@@ -360,6 +523,35 @@ public class MainActivity extends AppCompatActivity
         if (ledLight != null) {
             ledLight.blinkAsync(0xFF, 0x00, 0x00, 600, 400, 0, false); // red blink = failure
         }
+    }
+
+    /**
+     * Long-press on the status line: sweep the strip through red/green/blue and
+     * then blank it, so the LED wiring can be checked without a sale.
+     */
+    private void runLedSelfTest() {
+        final LedLightController led = ledLight;
+        if (led == null) {
+            showStatus("LED test: controller not created");
+            initLedLight();
+            return;
+        }
+        if (!led.isConnected()) {
+            showStatus("LED test: opening port");
+            led.initAsync((success, path, ver) -> {
+                if (success) {
+                    runLedSelfTest();
+                } else {
+                    showStatus("LED test: no LED port answered");
+                }
+            });
+            return;
+        }
+        showStatus("LED test on " + led.getDevicePath() + " (" + led.getVersion() + ")");
+        led.setColorAsync(0xFF, 0x00, 0x00);
+        scanHandler.postDelayed(() -> led.setColorAsync(0x00, 0xFF, 0x00), 700);
+        scanHandler.postDelayed(() -> led.setColorAsync(0x00, 0x00, 0xFF), 1400);
+        scanHandler.postDelayed(led::turnOffAsync, 2100);
     }
 
     @Override
@@ -462,8 +654,14 @@ public class MainActivity extends AppCompatActivity
         nfcPrompt = findViewById(R.id.nfc_prompt);
         nfcScrim = findViewById(R.id.nfc_scrim);
         ivNfcPrompt = findViewById(R.id.iv_nfc_prompt);
+        tvNfcPromptLabel = findViewById(R.id.tv_nfc_prompt_label);
         findViewById(R.id.tv_shop_name).setOnLongClickListener(v -> {
             printMultilingualTestReceipt();
+            return true;
+        });
+        // Long-press the status line to sweep the LED strip through R/G/B.
+        tvStatus.setOnLongClickListener(v -> {
+            runLedSelfTest();
             return true;
         });
         // Portrait-only search + category bar (the landscape layout has none).
@@ -703,6 +901,13 @@ public class MainActivity extends AppCompatActivity
 
     private void handleNFCDetected(Tag tag) {
         hideNfcPrompt();
+        // 贴卡支付也算完成，清掉"等语音确认"的状态
+        voicePaymentPending = false;
+        voiceHandler.removeCallbacks(voicePaymentTimeout);
+        voiceHandler.removeCallbacks(voiceRelistenRunnable);
+        if (isVoiceListening) {
+            stopVoiceListening();
+        }
         Toast.makeText(this, "NFC card detected, processing payment...", Toast.LENGTH_SHORT).show();
         nfcModeEnabled = false;
         disableNFCForegroundDispatch();
@@ -926,6 +1131,21 @@ public class MainActivity extends AppCompatActivity
         nfcPrompt.animate().cancel();
         nfcPrompt.setVisibility(View.VISIBLE);
         nfcPrompt.setAlpha(1f);
+
+        // 卡片下方提示随界面语言切换：贴卡和语音两种确认方式都说明白
+        if (tvNfcPromptLabel != null) {
+            switch (currentLangTag) {
+                case "zh":
+                    tvNfcPromptLabel.setText("贴卡，或说「确认支付」");
+                    break;
+                case "de":
+                    tvNfcPromptLabel.setText("Karte vorhalten oder „bestätigen“");
+                    break;
+                default:
+                    tvNfcPromptLabel.setText("Tap card, or say “check”");
+                    break;
+            }
+        }
 
         // Dim the product background so the customer's eyes lock onto the shaking card.
         if (nfcScrim != null) {
@@ -1636,7 +1856,7 @@ public class MainActivity extends AppCompatActivity
     /** 空闲状态提示语（说明当前怎么触发）。 */
     private String idleHint() {
         if (wakeEnabled) {
-            return "🎙 待唤醒：说「" + SpeechConfig.WAKE_WORDS[0][1] + "」，或点麦克风";
+            return "🎙 待唤醒：说" + SpeechConfig.wakeHint() + "，或点麦克风";
         }
         return "点麦克风开始说话（长按麦克风可开启语音唤醒）";
     }
@@ -1654,8 +1874,50 @@ public class MainActivity extends AppCompatActivity
         if (voiceAnnouncer != null) {
             voiceAnnouncer.stop(); // 万一正在播报，先掐掉，避免被自己的声音打断
         }
-        setVoiceStatus("🔔 已唤醒（" + keyword + "），请说要点什么…");
-        startVoiceListening();
+        // 英文唤醒词 → 自动切英文识别；中文唤醒词 → 切回中文。
+        // 否则「Hello, I'd like to order」被中文模型识别出来全是乱码。
+        boolean englishWake = keyword != null && keyword.matches(".*[A-Za-z]{2,}.*");
+        switchRecognitionLanguage(englishWake ? "en" : "zh");
+        // 支付类快捷唤醒词（"我要结算 / 我要买单" 等）：直接进入支付流程，
+        // 不再播欢迎语——弹卡 + 念金额 + 持续监听确认，直到付款结束。
+        if (SpeechConfig.isPaymentWake(keyword)) {
+            Log.i(TAG, "支付类唤醒词，直接进入支付流程");
+            startVoicePayment();
+            return;
+        }
+        // 先回应一句"我准备好了"，等这句话念完再开麦，
+        // 否则麦克风会把这句欢迎语当成顾客点的菜。
+        announceWakeReady(englishWake);
+        listenAgainAfterAnnouncement(300);
+    }
+
+    /**
+     * 唤醒后的欢迎播报。语言跟唤醒词走：说中文唤醒词就中文回复，
+     * 说英文唤醒词就英文回复，不受界面下拉框影响（下拉框的切换是异步的）。
+     */
+    private void announceWakeReady(boolean english) {
+        String msg = english
+                ? "I'm ready. What would you like to order?"
+                : "我已经准备好了，你可以点餐了";
+        setVoiceStatus((english ? "🔔 Awake — " : "🔔 已唤醒 — ") + msg);
+        Log.i(TAG, "announceWakeReady: english=" + english + ", text=" + msg);
+        if (voiceAnnouncer != null && voiceAnnouncer.isAvailable()) {
+            voiceAnnouncer.announce(msg, english ? Locale.ENGLISH : Locale.SIMPLIFIED_CHINESE);
+        }
+    }
+
+    /** 唤醒语言和界面语言不一致时同步下拉框（顺便切换识别/播报语言）。 */
+    private void switchRecognitionLanguage(String tag) {
+        if (tag == null || tag.equals(currentLangTag) || spinnerLanguage == null) {
+            return;
+        }
+        for (int i = 0; i < SpeechConfig.LANGUAGES.size(); i++) {
+            if (SpeechConfig.LANGUAGES.get(i).tag.equals(tag)) {
+                Log.i(TAG, "switchRecognitionLanguage: " + currentLangTag + " -> " + tag);
+                spinnerLanguage.setSelection(i); // 触发 applyLanguage
+                return;
+            }
+        }
     }
 
     private final Runnable resumeWakeRunnable = new Runnable() {
@@ -1692,7 +1954,7 @@ public class MainActivity extends AppCompatActivity
         wakeEnabled = !wakeEnabled;
         Log.i(TAG, "toggleWake: enabled=" + wakeEnabled);
         if (wakeEnabled) {
-            showToast("语音唤醒已开启：说「" + SpeechConfig.WAKE_WORDS[0][1] + "」");
+            showToast("语音唤醒已开启：说 " + SpeechConfig.wakeHint());
             if (wakeDetector != null && wakeDetector.isReady()) {
                 wakeDetector.resume();
                 startWakeListening();
@@ -1760,7 +2022,9 @@ public class MainActivity extends AppCompatActivity
         if (btnMic != null) {
             btnMic.setColorFilter(Color.RED);
         }
-        setVoiceStatus("🎤 聆听中…（说完停顿会自动结束）");
+        setVoiceStatus(voicePaymentPending
+                ? "💳 聆听中：说「确认支付」或 check"
+                : "🎤 聆听中…（说完停顿会自动结束）");
         voiceRecognizer.start(new IVoiceRecognizer.Listener() {
             @Override
             public void onReady() {
@@ -1789,6 +2053,7 @@ public class MainActivity extends AppCompatActivity
 
     private void stopVoiceListening() {
         isVoiceListening = false;
+        voiceRelistenArmed = false;
         if (voiceRecognizer != null) {
             voiceRecognizer.stop();
         }
@@ -1811,8 +2076,183 @@ public class MainActivity extends AppCompatActivity
             return;
         }
         setVoiceStatus("识别：" + text);
+        handleVoiceUtterance(text);
+    }
+
+    /**
+     * 一句识别结果进来后先判意图：
+     *  - 正在等支付确认 → 只认「确认支付 / check」「取消 / cancel」；
+     *  - 说「支付 / pay」→ 弹卡；
+     *  - 其余按点餐处理。
+     */
+    private void handleVoiceUtterance(String text) {
+        VoiceIntentParser.Intent intent = VoiceIntentParser.classify(text);
+        Log.i(TAG, "handleVoiceUtterance: intent=" + intent
+                + ", paymentPending=" + voicePaymentPending + ", text=[" + text + "]");
+        setVoiceStatus("识别：" + text + "（" + intentLabel(intent) + "）");
+
+        if (voicePaymentPending) {
+            if (intent == VoiceIntentParser.Intent.CONFIRM) {
+                confirmVoicePayment();
+                return;
+            }
+            if (intent == VoiceIntentParser.Intent.CANCEL) {
+                cancelVoicePayment(false);
+                return;
+            }
+            // 说了别的（比如又点了东西、或听到自己的回声）：不打断支付，静默继续听。
+            // 这里绝不能再播报"请说确认支付"，否则录到自己的声音会无限自问自答。
+            Log.i(TAG, "payment pending: ignore utterance, keep listening");
+            listenAgainAfterAnnouncement(400);
+            return;
+        }
+
+        if (intent == VoiceIntentParser.Intent.PAY) {
+            startVoicePayment();
+            return;
+        }
+
         processVoiceOrder(text);
         resumeWakeLater(1000);
+    }
+
+    private static String intentLabel(VoiceIntentParser.Intent intent) {
+        switch (intent) {
+            case PAY:
+                return "支付";
+            case CONFIRM:
+                return "确认";
+            case CANCEL:
+                return "取消";
+            case ORDER:
+                return "点餐";
+            default:
+                return "未识别";
+        }
+    }
+
+    // ============ 语音支付：pay → 卡片 → check → 打印 ============
+
+    /** 说「支付 / pay」：弹出 Visa / Mastercard 卡片，等确认。 */
+    private void startVoicePayment() {
+        if (orderItems.isEmpty()) {
+            Log.w(TAG, "startVoicePayment: order is empty");
+            announceForCurrentLang(
+                    "订单还是空的，请先点餐",
+                    "Your order is empty, please order something first",
+                    "Ihre Bestellung ist leer");
+            resumeWakeLater(1200);
+            return;
+        }
+        Log.i(TAG, "startVoicePayment: items=" + orderItems.size());
+        voicePaymentPending = true;
+
+        // 贴卡仍然可用：说 check 或直接刷卡都能完成，两条路都留着。
+        if (nfcAdapter != null && nfcAdapter.isEnabled()) {
+            nfcModeEnabled = true;
+            enableNFCForegroundDispatch();
+        }
+        showNfcPrompt();
+        ledPaymentWaiting();
+        showStatus("Waiting for payment confirmation... (say 确认支付 / check)");
+        setVoiceStatus("💳 请说「确认支付」或 check，也可以直接贴卡");
+
+        voiceHandler.removeCallbacks(voicePaymentTimeout);
+        voiceHandler.postDelayed(voicePaymentTimeout, VOICE_PAYMENT_TIMEOUT_MS);
+
+        // 注意：这里的播报不能出现"支付/确认/check"这类触发词，
+        // 否则麦克风会把播报当成顾客的确认指令（自问自答）。
+        double sum = calculateSubtotal();
+        String amount = decimalFormat.format(calculateTotal(sum, calculateTax(sum)));
+        announceForCurrentLang(
+                "总共 " + amount + " 元，请看屏幕上的卡片",
+                "Total " + amount + ", please check the card on screen",
+                "Gesamtbetrag " + amount + ", bitte Karte auf dem Bildschirm prüfen");
+        listenAgainAfterAnnouncement(300);
+    }
+
+    /** 说「确认支付 / check」：卡片收起 → 打印小票。 */
+    private void confirmVoicePayment() {
+        Log.i(TAG, "confirmVoicePayment");
+        voicePaymentPending = false;
+        voiceRelistenArmed = false;
+        voiceHandler.removeCallbacks(voicePaymentTimeout);
+        voiceHandler.removeCallbacks(voiceRelistenRunnable);
+        // 先关麦：否则「支付成功…」的播报会被自己识别成又要支付
+        if (isVoiceListening) {
+            stopVoiceListening();
+        }
+
+        hideNfcPrompt();
+        nfcModeEnabled = false;
+        disableNFCForegroundDispatch();
+        ledPaymentProcessing();
+
+        double subtotal = calculateSubtotal();
+        double tax = calculateTax(subtotal);
+        double total = calculateTotal(subtotal, tax);
+        Log.i(TAG, "confirmVoicePayment: total=" + total);
+        announceForCurrentLang(
+                "支付成功，正在打印小票",
+                "Payment confirmed, printing your receipt",
+                "Zahlung bestätigt, Bon wird gedruckt");
+        printReceipt("voice card payment", subtotal, tax, total);
+        resumeWakeLater(2500);
+    }
+
+    /** 说「取消 / cancel」或等太久：收起卡片，回到待唤醒。 */
+    private void cancelVoicePayment(boolean byTimeout) {
+        Log.i(TAG, "cancelVoicePayment: byTimeout=" + byTimeout);
+        voicePaymentPending = false;
+        voiceRelistenArmed = false;
+        voiceHandler.removeCallbacks(voicePaymentTimeout);
+        voiceHandler.removeCallbacks(voiceRelistenRunnable);
+        if (isVoiceListening) {
+            stopVoiceListening();
+        }
+
+        hideNfcPrompt();
+        nfcModeEnabled = false;
+        disableNFCForegroundDispatch();
+        if (usbPrinter != null && usbPrinter.isConnected()) {
+            ledPrinterConnected();
+        }
+        if (byTimeout) {
+            announceForCurrentLang("支付超时，已取消", "Payment timed out, cancelled",
+                    "Zeitüberschreitung, abgebrochen");
+        } else {
+            announceForCurrentLang("已取消支付", "Payment cancelled", "Zahlung abgebrochen");
+        }
+        resumeWakeLater(1200);
+    }
+
+    /** 播报结束后（含合成缓冲）再开麦，避免把自己的声音识别成指令。 */
+    private void listenAgainAfterAnnouncement(long extraDelayMs) {
+        voiceQuietSinceMs = 0;
+        voiceRelistenArmed = true;
+        voiceHandler.removeCallbacks(voiceRelistenRunnable);
+        voiceHandler.postDelayed(voiceRelistenRunnable, Math.max(200L, extraDelayMs));
+    }
+
+    /** 按当前界面语言播报，同时更新状态栏。 */
+    private void announceForCurrentLang(String zh, String en, String de) {
+        String msg;
+        switch (currentLangTag) {
+            case "zh":
+                msg = zh;
+                break;
+            case "de":
+                msg = de;
+                break;
+            default:
+                msg = en;
+                break;
+        }
+        setVoiceStatus(msg);
+        showStatus(msg);
+        if (voiceAnnouncer != null && voiceAnnouncer.isAvailable()) {
+            voiceAnnouncer.announce(msg, SpeechConfig.getLangByTag(currentLangTag).locale);
+        }
     }
 
     private void onVoiceError(String message) {

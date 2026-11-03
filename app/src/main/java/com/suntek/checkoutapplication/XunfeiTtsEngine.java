@@ -86,6 +86,80 @@ public class XunfeiTtsEngine {
         stopCurrent();
     }
 
+    /**
+     * 只合成、不播放，返回 16k/16bit/单声道 PCM。
+     * 仅用于调试：把一段语音直接喂给唤醒模型，绕开"喇叭→麦克风"的回声消除。
+     */
+    public byte[] synthesizeToPcm(String text, String vcn) {
+        if (text == null || text.trim().isEmpty()) {
+            return null;
+        }
+        XunfeiWebSocket ws = null;
+        ByteArrayOutputStream pcmAll = new ByteArrayOutputStream();
+        try {
+            ws = new XunfeiWebSocket(HOST, PATH);
+            ws.connect(SpeechConfig.XUNFEI_APP_ID, SpeechConfig.XUNFEI_API_KEY,
+                    SpeechConfig.XUNFEI_API_SECRET);
+
+            JSONObject root = new JSONObject();
+            JSONObject common = new JSONObject();
+            common.put("app_id", SpeechConfig.XUNFEI_APP_ID);
+            root.put("common", common);
+
+            JSONObject business = new JSONObject();
+            business.put("aue", "raw");
+            business.put("auf", "audio/L16;rate=16000");
+            business.put("vcn", vcn);
+            business.put("speed", 50);
+            business.put("volume", 80);
+            business.put("pitch", 50);
+            business.put("tte", "UTF8");
+            root.put("business", business);
+
+            JSONObject data = new JSONObject();
+            data.put("status", 2);
+            data.put("text", Base64.encodeToString(text.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP));
+            root.put("data", data);
+
+            ws.sendText(root.toString());
+            while (true) {
+                String msg = ws.readText();
+                if (msg == null) {
+                    break;
+                }
+                JSONObject json = new JSONObject(msg);
+                if (json.optInt("code", -1) != 0) {
+                    Log.e(TAG, "synthesizeToPcm error: " + msg);
+                    break;
+                }
+                JSONObject d = json.optJSONObject("data");
+                if (d == null) {
+                    continue;
+                }
+                String audioB64 = d.optString("audio", "");
+                if (!audioB64.isEmpty()) {
+                    pcmAll.write(Base64.decode(audioB64, Base64.NO_WRAP));
+                }
+                if (d.optInt("status", 1) == 2) {
+                    break;
+                }
+            }
+            Log.i(TAG, "synthesizeToPcm: text=" + text + " vcn=" + vcn
+                    + " bytes=" + pcmAll.size());
+            return pcmAll.size() > 0 ? pcmAll.toByteArray() : null;
+        } catch (Exception e) {
+            Log.e(TAG, "synthesizeToPcm failed: " + e.getMessage(), e);
+            return null;
+        } finally {
+            if (ws != null) {
+                try {
+                    ws.close();
+                } catch (Exception ignored) {
+                }
+            }
+        }
+    }
+
     private void stopCurrent() {
         XunfeiWebSocket ws = activeWs;
         activeWs = null;

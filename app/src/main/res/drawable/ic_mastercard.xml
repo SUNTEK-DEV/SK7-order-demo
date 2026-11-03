@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Mastercard mark: two overlapping circles with the brand-red / brand-orange intersection -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="46dp"
+    android:height="28dp"
+    android:viewportWidth="48"
+    android:viewportHeight="30">
+
+    <!-- left circle, centre (14,15) r=9 -->
+    <path
+        android:fillColor="#EB001B"
+        android:pathData="M5,15 a9,9 0 1,0 18,0 a9,9 0 1,0 -18,0" />
+
+    <!-- right circle, centre (28,15) r=9 -->
+    <path
+        android:fillColor="#F79E1B"
+        android:pathData="M19,15 a9,9 0 1,0 18,0 a9,9 0 1,0 -18,0" />
+
+    <!-- intersection lens -->
+    <path
+        android:fillColor="#FF5F00"
+        android:pathData="M21,9.34 A9,9 0 0 0 21,20.66 A9,9 0 0 0 21,9.34 Z" />
+</vector>

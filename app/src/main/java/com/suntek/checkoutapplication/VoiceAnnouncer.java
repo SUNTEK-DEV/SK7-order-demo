@@ -96,8 +96,11 @@ public class VoiceAnnouncer {
             return;
         }
         Locale use = (locale != null) ? locale : currentLocale;
-        // 中文字均约 200ms 语速；英文按字符折算。用于"播报期间别开唤醒"。
-        busyUntilMs = System.currentTimeMillis() + Math.max(1000, text.length() * 200L);
+        // 估算"播报占用"时长，用于播报期间别开唤醒/开麦。
+        // 中文约 190ms/字；英文按 ~70ms/字符（200ms 会把英文句子估成好几秒，导致开麦过晚）。
+        boolean cjk = use != null && "zh".equalsIgnoreCase(use.getLanguage());
+        long perChar = cjk ? 190L : 70L;
+        busyUntilMs = System.currentTimeMillis() + Math.max(900L, text.length() * perChar);
         if (isXunfeiUsable()) {
             String vcn = pickVcn(use);
             Log.i(TAG, "播报(讯飞 vcn=" + vcn + "): " + text);
@@ -131,6 +134,11 @@ public class VoiceAnnouncer {
 
     public boolean isSpeaking() {
         return xunfeiTts.isSpeaking();
+    }
+
+    /** 只合成不播放（调试唤醒词用，绕开回声消除）。 */
+    public byte[] synthesizeToPcm(String text, String vcn) {
+        return xunfeiTts.synthesizeToPcm(text, vcn);
     }
 
     /** 是否还在"播报中"（含刚开始合成的缓冲期）。唤醒监听应等它为 false 再恢复。 */

@@ -37,13 +37,112 @@ public final class SpeechConfig {
 
     // ======================= 语音唤醒 =======================
     /**
-     * 唤醒词配置：{ 拼音音素（空格分隔）, 中文显示 }。
-     * 音素必须使用 sougou-pinyin 风格的声母+韵母，且要在 assets/kws/tokens.txt 里存在。
-     * 想换唤醒词时改这里即可（例如「小收点餐」= x iǎo sh ōu d iǎn c ān）。
+     * 一条唤醒词。{@code tokens} 是 ppinyin（声母+带调韵母），必须都在 assets/kws/tokens.txt 里；
+     * {@code boost} / {@code threshold} 是 sherpa KWS 的每词参数（0 表示用全局默认）：
+     *  - boost 越大越容易命中（相当于热词加权）；
+     *  - threshold 是「触发所需的最低声学概率」，越小越容易触发（0~1）。
+     *
+     * 短词（如 hello 只有四个音素）天然比「你好点餐」难命中，
+     * 所以给它们单独的 boost/threshold，而不是去改全局阈值
+     * （全局调低会让「你好点餐」被环境噪声误触发）。
      */
-    public static final String[][] WAKE_WORDS = {
-            {"n ǐ h ǎo d iǎn c ān", "你好点餐"},
-            {"n ǐ h ǎo d iǎn d ān", "你好点单"},
+    public static class WakeWord {
+        public final String tokens;
+        public final String display;
+        public final float boost;
+        public final float threshold;
+
+        public WakeWord(String tokens, String display, float boost, float threshold) {
+            this.tokens = tokens;
+            this.display = display;
+            this.boost = boost;
+            this.threshold = threshold;
+        }
+    }
+
+    /**
+     * 唤醒词表。
+     *
+     * 关键经验：这个模型（wenetspeech KWS，ppinyin 词表）解出来的韵母是**带声调**的，
+     * 所以关键词里必须写 ǎ/ā/óu 这种带调 token；写成不带调的 "h a l ou" 几乎永不命中
+     * —— 这正是之前 hello/哈喽 唤不醒、而「你好点餐」（n ǐ h ǎo …）正常的原因。
+     * 英文只能按中文近音拼（hello ≈ 哈喽 / 嗨喽），声调不确定，就多写几种变体。
+     */
+    public static final List<WakeWord> WAKE_WORDS = new ArrayList<>();
+
+    static {
+        // —— 点餐唤醒（中文，已验证） ——
+        WAKE_WORDS.add(new WakeWord("n ǐ h ǎo d iǎn c ān", "你好点餐", 1.5f, 0.25f));
+        WAKE_WORDS.add(new WakeWord("n ǐ h ǎo d iǎn d ān", "你好点单", 1.5f, 0.25f));
+        // —— 支付类快捷唤醒（长词，误触极低）：待机时直接说这些词就进支付流程 ——
+        // 四个长词的 token 都已在 assets/kws/tokens.txt 中校验存在；boost 略高于点餐词、
+        // threshold 略低于点餐词，保证长词稳定命中（长词本身就极难被环境噪声误触发）。
+        WAKE_WORDS.add(new WakeWord("w ǒ y ào j ié s uàn", "我要结算", 2.0f, 0.20f));
+        WAKE_WORDS.add(new WakeWord("w ǒ y ào m ǎi d ān", "我要买单", 2.0f, 0.20f));
+        WAKE_WORDS.add(new WakeWord("w ǒ y ào zh ī f ù", "我要支付", 2.0f, 0.20f));
+        WAKE_WORDS.add(new WakeWord("w ǒ y ào f ù k uǎn", "我要付款", 2.0f, 0.20f));
+        // —— 英文 hello / 哈喽（给中文母语者说的「哈喽」）：短词，放宽阈值 + 提高加权 ——
+        // 声调来自实测：模型把「哈喽」解成 h ā l óu，写成不带调的 h a l ou 永远不命中。
+        // 英文标准 hello / hi 由 assets/kws_en 独立模型处理（见 WAKE_WORDS_EN），
+        // 这里不再放 check/pay/bill 等英文词——它们不在中文词表里，写进去只会被静默跳过。
+        WAKE_WORDS.add(new WakeWord("h ā l óu", "哈喽", 3.0f, 0.15f));
+        WAKE_WORDS.add(new WakeWord("h ǎ l óu", "哈喽", 3.0f, 0.15f));
+        WAKE_WORDS.add(new WakeWord("h āi l óu", "哈喽", 3.0f, 0.15f));
+        WAKE_WORDS.add(new WakeWord("h ǎi l óu", "哈喽", 3.0f, 0.15f));
+    }
+
+    /** 界面提示用的唤醒词说明（中英都给，方便双语顾客）。 */
+    public static String wakeHint() {
+        return "「你好点餐 / 我要结算」或「Hello / 哈喽」";
+    }
+
+    /**
+     * 判断一个唤醒词显示名是否属于「支付类快捷唤醒」。
+     * 用于让「我要结算 / 我要买单」等直接进支付流程，而不是先播欢迎语再听意图。
+     * 英文支付唤醒词（如 checkout / pay）若将来加入，也会在此识别。
+     */
+    public static boolean isPaymentWake(String keyword) {
+        if (keyword == null) {
+            return false;
+        }
+        return keyword.contains("结算") || keyword.contains("支付")
+                || keyword.contains("付款") || keyword.contains("买单")
+                || keyword.contains("结账")
+                || keyword.equalsIgnoreCase("checkout") || keyword.equalsIgnoreCase("pay");
+    }
+
+    /**
+     * 英文唤醒词（独立模型 assets/kws_en，BPE token，必须存在于它的 tokens.txt）。
+     *
+     * 为什么中文模型救不了英文：实测把英文 hello 的音频直接灌进中文 KWS 模型，
+     * 它解出来是 h ěn d òu / h ěn d uō（很逗 / 很多）—— 中文词表里根本没有英文音，
+     * 把「很多」设成唤醒词又会被日常对话频繁误触发，所以只能用英文模型。
+     *
+     * 为什么要写这么多变体：BPE 对同一个 "hello" 会有多种合法切分，而且同一个词
+     * 在「单独说」「句首后接其它词」「中文口音」三种情况下的解码结果完全不同
+     * （实测分别是 hono / who know / HE-LL-O）。只写一种切分会漏掉大半说法。
+     *
+     * 阈值取值是实测出来的：
+     *  - 太高（0.25）→ 短词几乎不触发；
+     *  - 太低（0.03/0.06）→ "how are you today" 被误判成 hello，
+     *    实测在实机上连环境噪声都能把它喊醒（日志里无故冒出 "检测到唤醒词：Hello"）。
+     * 0.12 是「4 条正样本全中 + 4 条负样本全不误触」的平衡点，别再往下调。
+     *
+     * 每行：{ token 序列, 显示名, boost, threshold }
+     */
+    public static final String[][] WAKE_WORDS_EN = {
+            // 标准英式/美式发音，BPE 会把 hello 切成下面几种，全给上（多一条几乎无额外开销）
+            {"▁HE LL O", "Hello", "3.0", "0.12"},
+            {"▁HE L LO", "Hello", "3.0", "0.12"},
+            {"▁HE L L O", "Hello", "3.0", "0.12"},
+            {"H E L L O", "Hello", "3.0", "0.12"},
+            // 带中国口音的 "hello"（哈喽）实测会被这个英文模型解成 "hono" / "who know"，
+            // 中文母语顾客占多数，这组命中率最高。
+            {"▁HO N O", "Hello", "3.0", "0.12"},
+            {"HO N O", "Hello", "3.0", "0.12"},
+            {"▁WHO ▁KNOW", "Hello", "2.5", "0.10"},
+            // 短招呼语
+            {"▁HI", "Hi", "2.0", "0.15"},
     };
 
     /** 是否默认开启语音唤醒（开机自动常驻监听）。 */

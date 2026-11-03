@@ -1,15 +1,21 @@
 package com.suntek.checkoutapplication;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -38,9 +44,12 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * This mainboard's vendor binder service (com.sdkapi.sdkapiservice) has an
  * UNIMPLEMENTED serial API (open/write/read are empty stubs returning 0), so
- * the port is opened directly instead: SELinux is permissive and /dev/ttyS1
- * is 0666, which a normal app can open. Baud/termios is configured through
- * /system/bin/stty, then FileInputStream/FileOutputStream are used for I/O.
+ * the port is opened directly instead: SELinux is permissive and the LED port
+ * is 0666, which a normal app can open. The strip is wired through a
+ * USB-serial bridge, so /dev/ttyUSB0 comes first and every ttyUSB/ttyACM node
+ * is probed with GET_INFO; the on-board ttySx UARTs are only a fallback.
+ * Baud/termios is configured through /system/bin/stty, then
+ * FileInputStream/FileOutputStream are used for I/O.
  *
  * The firmware has no blink command, so blinkAsync() is implemented app-side:
  * send the solid color once, then toggle SET_POWER on/off on a scheduler. A
@@ -58,11 +67,21 @@ public class LedLightController {
     private static final long ACK_TIMEOUT_MS = 500;
     private static final long CMD_GAP_MS = 20;
 
-    // This mainboard's app-accessible LED port (0666); others as fallback
-    private static final String PREFERRED_PORT = "/dev/ttyS1";
-    private static final String[] FALLBACK_PORTS = {
-            "/dev/ttyS4", "/dev/ttyS8", "/dev/ttyS9", "/dev/ttyS3", "/dev/ttyS6", "/dev/ttyS7"
+    // On this board the LED strip hangs off a USB-serial bridge, not the SoC
+    // UART: /dev/ttyUSB0 is the port that actually answers the LED protocol
+    // (verified with GET_INFO -> AA 55 01 89 05 00 01 00 04 03 ...). The USB
+    // ports are therefore probed first, on-board UARTs only as fallback.
+    private static final String PREFERRED_PORT = "/dev/ttyUSB0";
+    private static final String[] USB_PORTS = {
+            "/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyUSB2",
+            "/dev/ttyACM0", "/dev/ttyACM1"
     };
+    private static final String[] FALLBACK_PORTS = {
+            "/dev/ttyS1", "/dev/ttyS4", "/dev/ttyS8", "/dev/ttyS9", "/dev/ttyS3", "/dev/ttyS6", "/dev/ttyS7"
+    };
+    /** The port that answered last time, so a re-init skips the whole probe. */
+    private static final String PREF_NAME = "led_light";
+    private static final String PREF_PORT = "last_good_port";
 
     // Protocol constants
     private static final int FRAME_HEAD_0 = 0xAA;
@@ -113,30 +132,47 @@ public class LedLightController {
         String found = null;
         String ver = "WS2812B";
         try {
-            String port = openPort(PREFERRED_PORT);
-            if (port == null) {
-                for (String path : FALLBACK_PORTS) {
-                    port = openPort(path);
-                    if (port != null) {
-                        break;
+            List<String> candidates = buildCandidates();
+            Log.i(TAG, "LED probe order: " + candidates);
+            String openable = null;
+            for (String path : candidates) {
+                String opened = openPort(path);
+                if (opened == null) {
+                    continue;
+                }
+                String info = queryBoardInfo();
+                if (info != null) {
+                    ok = true;
+                    found = opened;
+                    ver = info;
+                    break;
+                }
+                // Opened but silent: remember it as a last resort and move on.
+                if (openable == null) {
+                    openable = opened;
+                }
+                closeStreams();
+            }
+            if (!ok && openable != null) {
+                // No port answered GET_INFO. The CH340 bridge sometimes needs
+                // a moment after a cold boot, so give the first openable port
+                // one more chance before falling back to blind output.
+                if (openPort(openable) != null) {
+                    String info = queryBoardInfo();
+                    ok = true;
+                    found = openable;
+                    ver = info != null ? info : "WS2812B-NOACK";
+                    if (info == null) {
+                        Log.w(TAG, "no LED reply on any port, using " + openable + " blind");
                     }
                 }
             }
-            if (port != null) {
-                ok = true;
-                found = port;
+            if (ok) {
+                rememberPort(found);
                 // Recommended init sequence: GET_INFO -> GET_STATUS
-                byte[] info = sendAndRead(buildFrame(CMD_GET_INFO, new byte[0]));
-                if (info != null && info.length >= 4) {
-                    int fwVersion = info[1] & 0xFF;
-                    int maxCount = (info[3] & 0xFF) << 8 | (info[2] & 0xFF);
-                    ver = "WS2812B-V" + fwVersion + " max" + maxCount;
-                    Log.i(TAG, "GET_INFO ok: version=" + fwVersion + " maxCount=" + maxCount);
-                } else {
-                    ver = "WS2812B-NOACK";
-                    Log.w(TAG, "GET_INFO no reply (board TX not wired or wrong port?)");
-                }
                 sendAndRead(buildFrame(CMD_GET_STATUS, new byte[0]));
+            } else {
+                Log.e(TAG, "LED board not reachable on any candidate port");
             }
         } catch (Exception e) {
             Log.e(TAG, "init failed", e);
@@ -149,8 +185,80 @@ public class LedLightController {
         }
     }
 
+    /**
+     * Ports to try, best first: the last port that answered, then every USB
+     * serial node currently present, then the board's on-board UARTs.
+     */
+    private List<String> buildCandidates() {
+        Set<String> ordered = new LinkedHashSet<>();
+        String remembered = prefs().getString(PREF_PORT, null);
+        if (remembered != null && new File(remembered).exists()) {
+            ordered.add(remembered);
+        }
+        ordered.add(PREFERRED_PORT);
+        for (String path : USB_PORTS) {
+            ordered.add(path);
+        }
+        // Catch enumeration-order surprises (ttyUSB3, ttyACM2, ...)
+        File dev = new File("/dev");
+        String[] nodes = dev.list();
+        if (nodes != null) {
+            for (String node : nodes) {
+                if (node.startsWith("ttyUSB") || node.startsWith("ttyACM")) {
+                    ordered.add("/dev/" + node);
+                }
+            }
+        }
+        for (String path : FALLBACK_PORTS) {
+            ordered.add(path);
+        }
+        List<String> existing = new ArrayList<>();
+        for (String path : ordered) {
+            if (new File(path).exists()) {
+                existing.add(path);
+            }
+        }
+        // Keep non-existent USB names out, but never return an empty list: the
+        // board may enumerate after the first probe attempt.
+        return existing.isEmpty() ? new ArrayList<>(ordered) : existing;
+    }
+
+    private SharedPreferences prefs() {
+        return context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+    }
+
+    private void rememberPort(String path) {
+        if (path != null) {
+            prefs().edit().putString(PREF_PORT, path).apply();
+        }
+    }
+
+    /** GET_INFO probe: returns a version string when the board answers. */
+    private String queryBoardInfo() {
+        byte[] info = sendAndRead(buildFrame(CMD_GET_INFO, new byte[0]));
+        if (info == null || info.length < 4) {
+            Log.w(TAG, "GET_INFO no reply on " + devicePath);
+            return null;
+        }
+        int fwVersion = info[1] & 0xFF;
+        int maxCount = (info[3] & 0xFF) << 8 | (info[2] & 0xFF);
+        version = "WS2812B-V" + fwVersion + " max" + maxCount;
+        Log.i(TAG, "GET_INFO ok on " + devicePath + ": version=" + fwVersion
+                + " maxCount=" + maxCount);
+        return version;
+    }
+
+    private void closeStreams() {
+        closeQuietly(uartIn);
+        closeQuietly(uartOut);
+        uartIn = null;
+        uartOut = null;
+        devicePath = null;
+    }
+
     /** Configure termios and open streams; returns the path on success. */
     private String openPort(String path) {
+        closeStreams();
         try {
             if (!configureUart(path)) {
                 Log.e(TAG, "stty failed for " + path);

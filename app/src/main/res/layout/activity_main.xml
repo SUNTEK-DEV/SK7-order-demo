@@ -602,18 +602,95 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent">
 
-        <ImageView
+        <!-- Two card faces (Visa + Mastercard); the whole row pulses while waiting -->
+        <LinearLayout
             android:id="@+id/iv_nfc_prompt"
-            android:layout_width="170dp"
-            android:layout_height="170dp"
-            android:src="@drawable/nfc"
-            android:scaleType="fitCenter"
-            android:padding="18dp"
-            android:background="@drawable/nfc_prompt_bg"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center"
             android:elevation="14dp"
             android:clickable="false"
-            android:focusable="false"
-            android:contentDescription="Tap NFC card to pay" />
+            android:focusable="false">
+
+            <!-- Visa -->
+            <FrameLayout
+                android:layout_width="168dp"
+                android:layout_height="106dp"
+                android:background="@drawable/card_visa_bg"
+                android:elevation="6dp"
+                android:clickable="false"
+                android:focusable="false">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center"
+                    android:fontFamily="sans-serif-condensed"
+                    android:includeFontPadding="false"
+                    android:letterSpacing="0.02"
+                    android:text="VISA"
+                    android:textColor="#1A1F71"
+                    android:textSize="34sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="bottom|start"
+                    android:layout_marginStart="14dp"
+                    android:layout_marginBottom="12dp"
+                    android:text="•••• 4242"
+                    android:textColor="#5A6072"
+                    android:textSize="11sp" />
+            </FrameLayout>
+
+            <!-- Mastercard -->
+            <FrameLayout
+                android:layout_width="168dp"
+                android:layout_height="106dp"
+                android:layout_marginStart="16dp"
+                android:background="@drawable/card_mastercard_bg"
+                android:elevation="6dp"
+                android:clickable="false"
+                android:focusable="false">
+
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center"
+                    android:orientation="vertical"
+                    android:gravity="center">
+
+                    <ImageView
+                        android:layout_width="46dp"
+                        android:layout_height="28dp"
+                        android:src="@drawable/ic_mastercard"
+                        android:contentDescription="Mastercard" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="mastercard"
+                        android:textColor="#1F2437"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:includeFontPadding="false" />
+                </LinearLayout>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="bottom|start"
+                    android:layout_marginStart="14dp"
+                    android:layout_marginBottom="12dp"
+                    android:text="•••• 5454"
+                    android:textColor="#5A6072"
+                    android:textSize="11sp" />
+            </FrameLayout>
+
+        </LinearLayout>
 
         <TextView
             android:id="@+id/tv_nfc_prompt_label"
