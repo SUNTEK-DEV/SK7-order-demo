@@ -148,6 +148,15 @@ public class MainActivity extends AppCompatActivity
     // ============ 语音支付（全程免接触） ============
     /** true 表示 Visa / Mastercard 卡片已弹出、正在等「确认支付 / check」。 */
     private volatile boolean voicePaymentPending = false;
+    /**
+     * true 表示已唤醒、处于「持续点餐会话」：一句一句连续听，直到付款结束
+     * （或顾客离开 / 取消）才回待机，而不是每点一样东西都要重新喊唤醒词。
+     */
+    private volatile boolean voiceSessionActive = false;
+    /** 会话中连续两次没听清（顾客多半已离开），自动结束会话回到待唤醒。 */
+    private int voiceSessionMissCount = 0;
+    /** 中文识别失败后自动切英文重听一次（只允许一次，防止来回横跳）。 */
+    private boolean voiceEnRetryArmed = false;
     private static final long VOICE_PAYMENT_TIMEOUT_MS = 45000L;
     /** 播报结束后的静音起点，用于判断"真的安静下来了"再开麦。 */
     private long voiceQuietSinceMs = 0;
@@ -907,6 +916,14 @@ public class MainActivity extends AppCompatActivity
         voiceHandler.removeCallbacks(voiceRelistenRunnable);
         if (isVoiceListening) {
             stopVoiceListening();
+        }
+        if (voiceSessionActive) {
+            // 贴卡也算付款结束：结束会话并播欢迎语（与语音确认支付同一条收尾链路）。
+            endVoiceSession();
+            announceForCurrentLang(
+                    "支付成功，正在打印小票，欢迎下次光临",
+                    "Payment confirmed, printing your receipt. Thank you and welcome back!",
+                    "Zahlung bestätigt, Bon wird gedruckt. Auf Wiedersehen!");
         }
         Toast.makeText(this, "NFC card detected, processing payment...", Toast.LENGTH_SHORT).show();
         nfcModeEnabled = false;
@@ -1878,6 +1895,10 @@ public class MainActivity extends AppCompatActivity
         // 否则「Hello, I'd like to order」被中文模型识别出来全是乱码。
         boolean englishWake = keyword != null && keyword.matches(".*[A-Za-z]{2,}.*");
         switchRecognitionLanguage(englishWake ? "en" : "zh");
+        // 唤醒即进入「持续点餐会话」：之后一直听，直到付款结束（或顾客离开）才回待机。
+        voiceSessionActive = true;
+        voiceSessionMissCount = 0;
+        voiceEnRetryArmed = false;
         // 支付类快捷唤醒词（"我要结算 / 我要买单" 等）：直接进入支付流程，
         // 不再播欢迎语——弹卡 + 念金额 + 持续监听确认，直到付款结束。
         if (SpeechConfig.isPaymentWake(keyword)) {
@@ -2069,7 +2090,20 @@ public class MainActivity extends AppCompatActivity
             btnMic.clearColorFilter();
         }
         if (text == null || text.trim().isEmpty()) {
-            Log.w(TAG, "finishVoiceRecognition: empty transcript");
+            Log.w(TAG, "finishVoiceRecognition: empty transcript, session=" + voiceSessionActive);
+            if (voiceSessionActive) {
+                // 会话中没听到内容：第一次提示后继续听；连续两次没声（顾客已离开）就结束会话。
+                voiceSessionMissCount++;
+                if (voiceSessionMissCount >= 2) {
+                    Log.i(TAG, "finishVoiceRecognition: session idle twice, back to standby");
+                    endVoiceSession();
+                    resumeWakeLater(800);
+                    return;
+                }
+                announceNoMatch();
+                listenAgainAfterAnnouncement(600);
+                return;
+            }
             setVoiceStatus("未识别到语音");
             announceNoMatch();
             resumeWakeLater(800);
@@ -2090,6 +2124,7 @@ public class MainActivity extends AppCompatActivity
         Log.i(TAG, "handleVoiceUtterance: intent=" + intent
                 + ", paymentPending=" + voicePaymentPending + ", text=[" + text + "]");
         setVoiceStatus("识别：" + text + "（" + intentLabel(intent) + "）");
+        voiceSessionMissCount = 0; // 说出内容了，会话空闲计数清零
 
         if (voicePaymentPending) {
             if (intent == VoiceIntentParser.Intent.CONFIRM) {
@@ -2113,7 +2148,12 @@ public class MainActivity extends AppCompatActivity
         }
 
         processVoiceOrder(text);
-        resumeWakeLater(1000);
+        if (voiceSessionActive) {
+            // 会话模式：点完一样继续听下一样，直到顾客说支付并完成付款。
+            listenAgainAfterAnnouncement(600);
+        } else {
+            resumeWakeLater(1000);
+        }
     }
 
     private static String intentLabel(VoiceIntentParser.Intent intent) {
@@ -2141,7 +2181,12 @@ public class MainActivity extends AppCompatActivity
                     "订单还是空的，请先点餐",
                     "Your order is empty, please order something first",
                     "Ihre Bestellung ist leer");
-            resumeWakeLater(1200);
+            if (voiceSessionActive) {
+                // 会话中订单是空的：继续听，顾客接着点餐即可，不必重新唤醒。
+                listenAgainAfterAnnouncement(1200);
+            } else {
+                resumeWakeLater(1200);
+            }
             return;
         }
         Log.i(TAG, "startVoicePayment: items=" + orderItems.size());
@@ -2176,6 +2221,7 @@ public class MainActivity extends AppCompatActivity
         Log.i(TAG, "confirmVoicePayment");
         voicePaymentPending = false;
         voiceRelistenArmed = false;
+        endVoiceSession(); // 付款结束，会话终止
         voiceHandler.removeCallbacks(voicePaymentTimeout);
         voiceHandler.removeCallbacks(voiceRelistenRunnable);
         // 先关麦：否则「支付成功…」的播报会被自己识别成又要支付
@@ -2193,9 +2239,9 @@ public class MainActivity extends AppCompatActivity
         double total = calculateTotal(subtotal, tax);
         Log.i(TAG, "confirmVoicePayment: total=" + total);
         announceForCurrentLang(
-                "支付成功，正在打印小票",
-                "Payment confirmed, printing your receipt",
-                "Zahlung bestätigt, Bon wird gedruckt");
+                "支付成功，正在打印小票，欢迎下次光临",
+                "Payment confirmed, printing your receipt. Thank you and welcome back!",
+                "Zahlung bestätigt, Bon wird gedruckt. Auf Wiedersehen!");
         printReceipt("voice card payment", subtotal, tax, total);
         resumeWakeLater(2500);
     }
@@ -2205,6 +2251,7 @@ public class MainActivity extends AppCompatActivity
         Log.i(TAG, "cancelVoicePayment: byTimeout=" + byTimeout);
         voicePaymentPending = false;
         voiceRelistenArmed = false;
+        endVoiceSession(); // 取消/超时也结束会话，避免麦克风被一直占着
         voiceHandler.removeCallbacks(voicePaymentTimeout);
         voiceHandler.removeCallbacks(voiceRelistenRunnable);
         if (isVoiceListening) {
@@ -2224,6 +2271,14 @@ public class MainActivity extends AppCompatActivity
             announceForCurrentLang("已取消支付", "Payment cancelled", "Zahlung abgebrochen");
         }
         resumeWakeLater(1200);
+    }
+
+    /** 结束点餐会话，回到待唤醒状态（付款完成 / 取消 / 顾客离开时调用）。 */
+    private void endVoiceSession() {
+        Log.i(TAG, "endVoiceSession");
+        voiceSessionActive = false;
+        voiceSessionMissCount = 0;
+        voiceEnRetryArmed = false;
     }
 
     /** 播报结束后（含合成缓冲）再开麦，避免把自己的声音识别成指令。 */
@@ -2257,6 +2312,7 @@ public class MainActivity extends AppCompatActivity
 
     private void onVoiceError(String message) {
         isVoiceListening = false;
+        endVoiceSession(); // 识别出错（网络/权限等），会话终止，回待机更可预期
         if (btnMic != null) {
             btnMic.clearColorFilter();
         }
@@ -2273,9 +2329,25 @@ public class MainActivity extends AppCompatActivity
                 + "], parsedCommands=" + commands.size());
         if (commands.isEmpty()) {
             Log.w(TAG, "processVoiceOrder: no product matched, products=" + (productList == null ? -1 : productList.size()));
+            // 中文识别里混着英文单词却没匹配到商品：多半是顾客用中文唤醒后照着
+            // 英文餐单念（讯飞 zh_cn 模型听英文基本是乱码）。自动切英文识别，请顾客再说一遍。
+            if ("zh".equals(currentLangTag) && !voiceEnRetryArmed
+                    && transcript != null && transcript.matches(".*[A-Za-z]{2,}.*")) {
+                voiceEnRetryArmed = true;
+                Log.i(TAG, "processVoiceOrder: zh transcript has latin words, switch to en and re-listen");
+                switchRecognitionLanguage("en");
+                setVoiceStatus("已切换英文识别，请再说一遍 / Please say it again");
+                showToast("已切换英文识别，请再说一遍");
+                if (voiceAnnouncer != null && voiceAnnouncer.isAvailable()) {
+                    voiceAnnouncer.announce("Please say it again", Locale.US);
+                }
+                return;
+            }
             announceNoMatch();
             return;
         }
+        voiceSessionMissCount = 0;
+        voiceEnRetryArmed = false;
         for (VoiceOrderParser.OrderCommand cmd : commands) {
             Log.i(TAG, "processVoiceOrder: add " + cmd.displayName + " x" + cmd.quantity
                     + " (id=" + cmd.product.getId() + ")");
